@@ -28,6 +28,7 @@ const state = {
   },
   drawer: null,
   modal: null,
+  qrModal: null,
   search: '',
   toast: ''
 };
@@ -62,6 +63,15 @@ const userNavItems = [
 
 function h(value) {
   return String(value ?? '').replace(/[&<>"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]));
+}
+
+function customerFacingNodeName(value) {
+  const sanitized = String(value || '')
+    .replace(/3\s*-?\s*x?\s*-?\s*ui/gi, '')
+    .replace(/x\s*-?\s*ui/gi, '')
+    .replace(/导入/gi, '')
+    .trim();
+  return sanitized || '当前节点';
 }
 
 function money(value) {
@@ -151,6 +161,10 @@ async function copyText(text) {
   textarea.select();
   document.execCommand('copy');
   textarea.remove();
+}
+
+function nodeStatusLabel(node) {
+  return statusText[node?.status] || node?.status || '-';
 }
 
 async function bootstrap() {
@@ -325,6 +339,7 @@ function renderAdminApp() {
     </section>
     ${state.drawer ? renderDrawer() : ''}
     ${state.modal ? renderModal() : ''}
+    ${state.qrModal ? renderQrModal() : ''}
     ${state.toast ? `<div class="toast">${h(state.toast)}</div>` : ''}`;
   bindEvents();
 }
@@ -566,6 +581,7 @@ function renderUserApp() {
       </section>
     </section>
     ${state.modal ? renderModal() : ''}
+    ${state.qrModal ? renderQrModal() : ''}
     ${state.toast ? `<div class="toast">${h(state.toast)}</div>` : ''}`;
   bindEvents();
 }
@@ -637,12 +653,29 @@ function renderUserFinanceLogs() {
 
 function renderUserNodes() {
   const node = state.db.node;
-  if (!node) return `<section class="panel"><div class="panel-head"><div><h2>节点管理</h2><p>管理员尚未给当前账号绑定 3x-ui 节点。</p></div></div><div class="empty">请联系管理员配置节点。</div></section>`;
+  if (!node) return `<section class="panel"><div class="panel-head"><div><h2>节点管理</h2><p>管理员尚未给当前账号绑定节点。</p></div></div><div class="empty">请联系管理员配置节点。</div></section>`;
+  const displayName = customerFacingNodeName(node.name);
   return `<section class="panel">
-    <div class="panel-head"><div><h2>节点管理</h2><p>这里只展示当前账号已绑定的节点信息，节点新增和路由配置由管理员维护。</p></div></div>
-    <table><thead><tr><th>3x-ui 节点</th><th>续费价格</th><th>到期时间</th><th>Inbound</th><th>Client Email</th><th>UUID</th><th>协议</th><th>SOCKS</th><th>状态</th></tr></thead>
-    <tbody><tr><td>${h(node.xuiServerName || '-')}</td><td>${money(node.renewPrice)} ${h(state.db.settings.currency)} / 月</td><td>${fmtDate(node.expireAt)}</td><td>${h(node.inboundId || '-')}<div class="muted">${h(node.inboundRemark || '')}</div></td><td class="mono">${h(node.clientEmail || '-')}</td><td class="mono">${h(node.clientUuid || '-')}</td><td>${h(node.protocol || '-')}</td><td>${node.useSocks ? h(node.socksName || '已启用') : '未启用'}</td><td><span class="status ${node.status}">${statusText[node.status] || node.status}</span></td></tr></tbody></table>
+    <div class="panel-head"><div><h2>节点管理</h2><p>这里只展示当前账号可使用的节点，配置由管理员维护。</p></div></div>
+    <table class="user-node-table"><thead><tr><th>节点</th><th>续费价格</th><th>到期时间</th><th>可用流量</th><th>状态</th><th>操作</th></tr></thead>
+    <tbody><tr><td class="main-cell"><strong>${h(displayName)}</strong><div class="muted">当前账号专属节点</div></td><td>${money(node.renewPrice)} ${h(state.db.settings.currency)} / 月</td><td>${fmtDate(node.expireAt)}</td><td>${h(node.trafficLimitGb || 0)} GB</td><td><span class="status ${node.status}">${h(nodeStatusLabel(node))}</span></td><td><div class="inline-actions"><button class="btn small primary" data-action="copy-user-sub" ${node.subscriptionReady ? '' : 'disabled'}>复制订阅</button><button class="btn small" data-action="show-user-qr" ${node.subscriptionReady ? '' : 'disabled'}>二维码</button></div></td></tr></tbody></table>
   </section>`;
+}
+
+function renderQrModal() {
+  const modal = state.qrModal;
+  if (!modal) return '';
+  return `<div class="modal-backdrop" data-qr-backdrop>
+    <div class="modal-card qr-card" data-qr-card>
+      <div class="modal-content">
+        <h2>${h(modal.title || '节点二维码')}</h2>
+        <p>二维码对应第一条节点链接；需要全部链接时请复制下方内容导入。</p>
+        <div class="qr-box"><img src="${h(modal.qr)}" alt="节点订阅二维码"></div>
+        <textarea class="copy-area mono qr-copy" readonly>${h(modal.text || '')}</textarea>
+      </div>
+      <footer><button class="btn" type="button" data-action="close-qr">关闭</button><button class="btn primary" type="button" data-action="copy-qr-sub">复制订阅</button></footer>
+    </div>
+  </div>`;
 }
 
 function renderDrawer() {
@@ -801,6 +834,13 @@ function bindEvents() {
   });
   document.querySelector('#modalForm')?.addEventListener('click', (event) => event.stopPropagation());
   document.querySelector('#modalForm')?.addEventListener('submit', handleModalSubmit);
+  document.querySelector('[data-qr-backdrop]')?.addEventListener('click', (event) => {
+    if (event.target === event.currentTarget) {
+      state.qrModal = null;
+      render();
+    }
+  });
+  document.querySelector('[data-qr-card]')?.addEventListener('click', (event) => event.stopPropagation());
   const drawerForm = document.querySelector('#drawerForm');
   drawerForm?.addEventListener('click', (event) => event.stopPropagation());
   drawerForm?.addEventListener('submit', handleDrawerSubmit);
@@ -810,6 +850,10 @@ function bindEvents() {
 
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return;
+  if (state.qrModal) {
+    state.qrModal = null;
+    return render();
+  }
   if (state.modal) return closeModal(null);
   if (state.drawer) {
     state.drawer = null;
@@ -829,6 +873,24 @@ async function handleAction(event) {
   try {
     if (action === 'refresh') return refresh();
     if (action === 'cancel-modal') return closeModal(null);
+    if (action === 'close-qr') {
+      state.qrModal = null;
+      return render();
+    }
+    if (action === 'copy-qr-sub') {
+      if (!state.qrModal?.text) return toast('没有可复制的订阅内容');
+      await copyText(state.qrModal.text);
+      return toast('订阅已复制');
+    }
+    if (action === 'copy-user-sub' || action === 'show-user-qr') {
+      const result = await api('/api/user/node/subscription');
+      if (action === 'copy-user-sub') {
+        await copyText(result.data.text || '');
+        return toast('订阅已复制');
+      }
+      state.qrModal = { title: customerFacingNodeName(result.data.nodeName), qr: result.data.qr, text: result.data.text || '' };
+      return render();
+    }
     if (action === 'logout') {
       await api('/api/logout', { method: 'POST', body: { entry: entryMode } });
       state.user = null;

@@ -279,6 +279,17 @@ button:disabled { cursor: not-allowed; opacity: .55; }
   white-space: pre;
 }
 
+.user-node-table {
+  min-width: 760px;
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 table {
   width: 100%;
   min-width: 1120px;
@@ -455,6 +466,31 @@ input[type="checkbox"] { width: auto; height: auto; }
   border-radius: 8px;
   box-shadow: 0 24px 72px rgba(16,24,40,.28);
   padding: 20px;
+}
+
+.qr-card {
+  width: min(520px, 100%);
+}
+
+.qr-box {
+  display: grid;
+  place-items: center;
+  margin: 18px 0 14px;
+  padding: 16px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.qr-box img {
+  width: min(260px, 100%);
+  height: auto;
+  display: block;
+}
+
+.qr-copy {
+  min-height: 96px;
+  max-height: 160px;
 }
 
 .modal-icon {

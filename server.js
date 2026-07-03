@@ -29,6 +29,7 @@ const sessions = new Map();
 const loginAttempts = new Map();
 let mysqlPool = null;
 let redisClient = null;
+let qrCodeModule = null;
 let apiWriteQueue = Promise.resolve();
 let setupRequired = false;
 
@@ -1234,6 +1235,16 @@ function publicCustomer(customer) {
   return { ...safeCustomer, computedStatus: customerStatus(customer) };
 }
 
+function publicNodeName(customer) {
+  const raw = String(customer?.packageName || customer?.inboundRemark || customer?.name || '').trim();
+  const sanitized = raw
+    .replace(/3\s*-?\s*x?\s*-?\s*ui/gi, '')
+    .replace(/x\s*-?\s*ui/gi, '')
+    .replace(/导入/gi, '')
+    .trim();
+  return sanitized || '当前节点';
+}
+
 function publicDb(db) {
   return {
     settings: {
@@ -1284,18 +1295,12 @@ function publicUserDb(db, customer) {
     },
     customer: safeCustomer,
     node: customer.xuiServerId ? {
-      xuiServerName: db.xuiServers.find((server) => server.id === customer.xuiServerId)?.name || '',
-      inboundId: customer.inboundId || '',
-      inboundRemark: customer.inboundRemark || '',
-      clientEmail: customer.clientEmail || '',
-      clientUuid: customer.clientUuid || '',
-      protocol: customer.protocol || 'vless',
+      name: publicNodeName(customer),
       renewPrice: Number(customer.amount || 0),
       trafficLimitGb: Number(customer.trafficLimitGb || 0),
       expireAt: customer.expireAt || '',
-      useSocks: Boolean(customer.useSocks),
-      socksName: db.socksNodes.find((node) => node.id === customer.socksNodeId)?.name || '',
-      status: customerStatus(customer)
+      status: customerStatus(customer),
+      subscriptionReady: Boolean(customer.clientId || customer.clientEmail)
     } : null,
     balanceLogs: db.balanceLogs.filter((log) => log.customerId === customer.id).slice(-50).reverse(),
     renewalLogs: db.renewalLogs.filter((log) => log.customerId === customer.id).slice(-50).reverse()
@@ -2066,6 +2071,55 @@ async function xuiRequest(server, endpoint, options = {}) {
   return xuiFetch(server, endpoint, { ...options, headers });
 }
 
+async function qrDataUrl(text) {
+  qrCodeModule ||= await import('qrcode');
+  return qrCodeModule.toDataURL(text, {
+    errorCorrectionLevel: 'M',
+    margin: 2,
+    width: 260,
+    color: { dark: '#0f172a', light: '#ffffff' }
+  });
+}
+
+function pickSubscriptionLinks(data) {
+  const values = [];
+  const collect = (value) => {
+    const parsed = parseMaybeJson(value);
+    if (Array.isArray(parsed)) return parsed.forEach(collect);
+    if (parsed && typeof parsed === 'object') {
+      for (const key of ['link', 'url', 'uri', 'shareLink', 'subscription', 'sub', 'obj', 'data', 'result', 'items', 'links']) collect(parsed[key]);
+      return;
+    }
+    const text = String(parsed || value || '').trim();
+    if (!text) return;
+    text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => values.push(line));
+  };
+  collect(data);
+  return [...new Set(values.filter((value) => /^[a-z][a-z0-9+.-]*:\/\//i.test(value)))];
+}
+
+async function getCustomerSubscription(db, customer) {
+  if (!customer?.xuiServerId) throw new Error('当前账号还没有绑定节点');
+  const server = db.xuiServers.find((item) => item.id === customer.xuiServerId);
+  if (!server) throw new Error('绑定的 3-x-ui 节点不存在');
+  const subId = String(customer.clientId || customer.clientEmail || '').trim();
+  if (!subId) throw new Error('当前节点没有订阅 ID，请联系管理员同步节点');
+  const endpoint = withApiPrefix(server, `/panel/api/clients/subLinks/${encodeURIComponent(subId)}`);
+  const result = await xuiRequest(server, endpoint, { method: 'GET' });
+  const links = pickSubscriptionLinks(result.data);
+  if (!links.length) throw new Error('3-x-ui 没有返回可用订阅链接，请确认客户端已启用并完成同步');
+  const text = links.join('\n');
+  const qrText = links[0];
+  return {
+    nodeName: publicNodeName(customer),
+    subId,
+    links,
+    text,
+    qrText,
+    qr: await qrDataUrl(qrText)
+  };
+}
+
 function xuiArray(data) {
   const root = xuiObject(data);
   const obj = parseMaybeJson(data?.obj);
@@ -2473,7 +2527,7 @@ function customerFromXuiClient(server, item, context = {}) {
     id: id('cus'),
     name: clientNameOf(client, email),
     contact: '',
-    packageName: String(client.groupName || client.group_name || client.packageName || '3-xui 导入').trim() || '3-xui 导入',
+    packageName: String(client.groupName || client.group_name || client.packageName || '导入节点').trim() || '导入节点',
     amount: 0,
     expireAt: expiryIsoFromClient(client),
     trafficLimitGb: trafficGbFromClient(client),
@@ -3547,6 +3601,18 @@ async function routeApiUnlocked(req, res, url) {
     addLog(db, customer.id, 'renew', detail.warnings.length ? 'warning' : 'success', `用户自助续费 ${months} 个月`, detail);
     await writeDb(db);
     return send(res, 200, { ok: true, data: publicUserDb(db, customer), detail, warning: detail.warnings.join('；') });
+  }
+
+  if (url.pathname === '/api/user/node/subscription' && req.method === 'GET') {
+    if (!requireUser(session, res)) return;
+    const customer = db.customers.find((item) => item.id === session.customerId);
+    if (!customer || customer.status === 'disabled') return sendError(res, 404, '用户不存在或已停用');
+    try {
+      const subscription = await getCustomerSubscription(db, customer);
+      return send(res, 200, { ok: true, data: subscription });
+    } catch (error) {
+      return sendError(res, error.statusCode || 500, '获取订阅失败', error.message);
+    }
   }
 
   if (!requireAdmin(session, res)) return;
