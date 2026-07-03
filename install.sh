@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_NAME="${APP_NAME:-shiye-management-system}"
-INSTALLER_VERSION="2026-07-04-2"
+INSTALLER_VERSION="2026-07-04-3"
 APP_DIR="${APP_DIR:-/opt/shiye-management-system}"
 PORT="${PORT:-3388}"
 ADMIN_PATH="${ADMIN_PATH:-/admin}"
@@ -120,6 +120,24 @@ package_install() {
   fi
 }
 
+install_base_tools() {
+  missing=""
+  for command_name in curl git; do
+    if ! command -v "${command_name}" >/dev/null 2>&1; then
+      missing="${missing} ${command_name}"
+    fi
+  done
+  if [ -z "${missing}" ]; then
+    return
+  fi
+  echo "==> 安装基础工具:${missing}"
+  if command -v apt >/dev/null 2>&1; then
+    package_install curl ca-certificates gnupg git
+  elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
+    package_install curl ca-certificates git
+  fi
+}
+
 random_password() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 12
@@ -143,6 +161,7 @@ validate_mysql_identifier() {
 }
 
 install_node() {
+  install_base_tools
   if [ "${INSTALL_NODE}" = "0" ] || [ "${INSTALL_NODE}" = "false" ]; then
     echo "==> 跳过 Node.js 安装"
     return
@@ -339,6 +358,10 @@ install_app_files() {
   fi
 
   if [ -n "${REPO_URL}" ]; then
+    if ! command -v git >/dev/null 2>&1; then
+      echo "未检测到 git，请先安装 git 后重试：apt install -y git"
+      exit 1
+    fi
     if [ -d "${APP_DIR}/.git" ]; then
       git -C "${APP_DIR}" remote set-url origin "${REPO_URL}" >/dev/null 2>&1 || true
       git -C "${APP_DIR}" pull --ff-only
