@@ -2,366 +2,241 @@
 set -euo pipefail
 
 APP_NAME="${APP_NAME:-shiye-management-system}"
-INSTALLER_VERSION="2026-07-04-4"
-DEFAULT_REPO_URL="https://github.com/wstimin/3-xuiguanli-shangye.git"
 APP_DIR="${APP_DIR:-/opt/shiye-management-system}"
 PORT="${PORT:-3388}"
 ADMIN_PATH="${ADMIN_PATH:-/admin}"
-REPO_URL="${REPO_URL:-${DEFAULT_REPO_URL}}"
+REPO_URL="${REPO_URL:-}"
+DEFAULT_REPO_URL="https://github.com/wstimin/3-xuiguanli-shangye.git"
 SERVICE_FILE="/etc/systemd/system/${APP_NAME}.service"
 ENV_FILE="/etc/default/${APP_NAME}"
-INTERACTIVE="${INTERACTIVE:-auto}"
-INSTALL_NODE="${INSTALL_NODE:-auto}"
-INSTALL_NGINX="${INSTALL_NGINX:-}"
-SETUP_SSL="${SETUP_SSL:-}"
-DOMAIN="${DOMAIN:-}"
+
+ENABLE_NGINX="${ENABLE_NGINX:-ask}"
+ENABLE_HTTPS="${ENABLE_HTTPS:-ask}"
+DOMAIN="${DOMAIN:-${SITE_DOMAIN:-}}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 
-if [ -z "${DB_CLIENT:-}" ]; then
-  if [ -n "${DATABASE_URL:-}" ] || [ -n "${MYSQL_HOST:-}" ]; then
-    DB_CLIENT="mysql"
-  else
-    DB_CLIENT="json"
-  fi
-fi
+MYSQL_DATABASE="${MYSQL_DATABASE:-shiye_management}"
+MYSQL_USER="${MYSQL_USER:-shiye}"
+MYSQL_PORT="${MYSQL_PORT:-3306}"
+MYSQL_CONNECTION_LIMIT="${MYSQL_CONNECTION_LIMIT:-10}"
+SESSION_PREFIX="${SESSION_PREFIX:-shiye:session:}"
 
-if [ "$(id -u)" -ne 0 ]; then
-  echo "请使用 root 用户运行：sudo bash install.sh"
-  exit 1
-fi
+log() { echo "==> $*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
 
-on_error() {
-  exit_code="$?"
-  echo
-  echo "安装失败，错误位置：第 ${BASH_LINENO[0]} 行，退出码：${exit_code}"
-  echo "你可以重新执行安装命令，脚本会继续使用已安装的环境。"
-  exit "${exit_code}"
-}
-
-trap on_error ERR
-
-can_prompt() {
-  [ "${INTERACTIVE}" != "0" ] && [ "${INTERACTIVE}" != "false" ] && [ -t 0 ]
+to_lower() {
+  printf "%s" "$1" | tr '[:upper:]' '[:lower:]'
 }
 
 is_yes() {
-  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
-    y|yes|1|true|是) return 0 ;;
-    *) return 1 ;;
-  esac
+  value="$(to_lower "$1")"
+  [ "${value}" = "y" ] || [ "${value}" = "yes" ] || [ "${value}" = "1" ] || [ "${value}" = "true" ] || [ "${value}" = "on" ] || [ "${value}" = "enable" ] || [ "${value}" = "enabled" ]
 }
 
-ask_value() {
-  prompt="$1"
-  default_value="${2:-}"
-  secret="${3:-0}"
-  if ! can_prompt; then
-    printf '%s' "${default_value}"
-    return
-  fi
-  if [ -n "${default_value}" ]; then
-    label="${prompt} [${default_value}]"
-  else
-    label="${prompt}"
-  fi
-  if [ "${secret}" = "1" ]; then
-    read -r -s -p "${label}: " value
-    echo >&2
-  else
-    read -r -p "${label}: " value
-  fi
-  printf '%s' "${value:-${default_value}}"
+is_no() {
+  value="$(to_lower "$1")"
+  [ "${value}" = "n" ] || [ "${value}" = "no" ] || [ "${value}" = "0" ] || [ "${value}" = "false" ] || [ "${value}" = "off" ] || [ "${value}" = "disable" ] || [ "${value}" = "disabled" ] || [ "${value}" = "skip" ]
 }
 
 ask_yes_no() {
   prompt="$1"
-  default_value="${2:-y}"
-  if ! can_prompt; then
-    is_yes "${default_value}"
+  default_answer="$2"
+  if [ ! -t 0 ]; then
+    is_yes "${default_answer}"
     return
   fi
-  if is_yes "${default_value}"; then
-    suffix="Y/n"
-  else
-    suffix="y/N"
-  fi
-  read -r -p "${prompt} [${suffix}]: " value
-  value="${value:-${default_value}}"
-  is_yes "${value}"
-}
 
-ask_choice() {
-  prompt="$1"
-  default_value="$2"
-  shift 2
-  if ! can_prompt; then
-    printf '%s' "${default_value}"
-    return
-  fi
-  echo >&2
-  echo "${prompt}" >&2
-  index=1
-  for option in "$@"; do
-    echo "  ${index}) ${option}" >&2
-    index=$((index + 1))
+  while true; do
+    if is_yes "${default_answer}"; then
+      read -r -p "${prompt} [Y/n]: " answer
+      answer="${answer:-y}"
+    else
+      read -r -p "${prompt} [y/N]: " answer
+      answer="${answer:-n}"
+    fi
+
+    if is_yes "${answer}"; then
+      return 0
+    fi
+    if is_no "${answer}"; then
+      return 1
+    fi
+    echo "Please answer yes or no."
   done
-  read -r -p "请选择 [${default_value}]: " value
-  printf '%s' "${value:-${default_value}}"
 }
 
-normalize_route_path() {
-  value="${1:-/admin}"
-  case "${value}" in
-    /*) printf '%s' "${value%/}" ;;
-    *) printf '/%s' "${value%/}" ;;
+require_root() {
+  [ "$(id -u)" -eq 0 ] || die "Please run as root: sudo bash install.sh"
+  command -v systemctl >/dev/null 2>&1 || die "systemd is required for one-click service installation"
+}
+
+normalize_app_dir() {
+  parent_dir="$(dirname "${APP_DIR}")"
+  base_name="$(basename "${APP_DIR}")"
+  [ -n "${base_name}" ] && [ "${base_name}" != "." ] && [ "${base_name}" != "/" ] || die "Invalid APP_DIR: ${APP_DIR}"
+  mkdir -p "${parent_dir}"
+  parent_abs="$(cd "${parent_dir}" && pwd -P)"
+  if [ "${parent_abs}" = "/" ]; then
+    APP_DIR="/${base_name}"
+  else
+    APP_DIR="${parent_abs}/${base_name}"
+  fi
+
+  case "${APP_DIR}" in
+    /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var|/www|/www/wwwroot)
+      die "Refusing unsafe APP_DIR: ${APP_DIR}"
+      ;;
   esac
 }
 
-package_install() {
+detect_pkg_manager() {
   if command -v apt >/dev/null 2>&1; then
-    apt update
-    apt install -y "$@"
+    PKG_MANAGER="apt"
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y "$@"
+    PKG_MANAGER="dnf"
   elif command -v yum >/dev/null 2>&1; then
-    yum install -y "$@"
+    PKG_MANAGER="yum"
   else
-    echo "未识别的系统包管理器，请手动安装：$*"
-    exit 1
+    die "Unsupported system: apt, dnf or yum is required"
   fi
 }
 
-install_base_tools() {
-  missing=""
-  for command_name in curl git; do
-    if ! command -v "${command_name}" >/dev/null 2>&1; then
-      missing="${missing} ${command_name}"
-    fi
-  done
-  if [ -z "${missing}" ]; then
-    return
-  fi
-  echo "==> 安装基础工具:${missing}"
-  if command -v apt >/dev/null 2>&1; then
-    package_install curl ca-certificates gnupg git
-  elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
-    package_install curl ca-certificates git
-  fi
+install_base_packages() {
+  case "${PKG_MANAGER}" in
+    apt)
+      apt update
+      DEBIAN_FRONTEND=noninteractive apt install -y curl ca-certificates gnupg git openssl
+      ;;
+    dnf)
+      dnf install -y curl ca-certificates git openssl
+      ;;
+    yum)
+      yum install -y curl ca-certificates git openssl
+      ;;
+  esac
 }
 
-random_password() {
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 12
-  elif [ -r /dev/urandom ]; then
-    od -An -N12 -tx1 /dev/urandom | tr -d ' \n'
-    echo
-  else
-    date +%s%N | sha256sum | cut -c 1-24
-  fi
-}
-
-validate_mysql_identifier() {
-  label="$1"
-  value="$2"
-  case "${value}" in
-    ''|*[!A-Za-z0-9_]*|[0-9]*)
-      echo "${label} 只能使用字母、数字、下划线，并且不能以数字开头：${value}"
-      exit 1
+install_package() {
+  package_name="$1"
+  case "${PKG_MANAGER}" in
+    apt)
+      DEBIAN_FRONTEND=noninteractive apt install -y "${package_name}"
+      ;;
+    dnf)
+      dnf install -y "${package_name}"
+      ;;
+    yum)
+      yum install -y "${package_name}"
       ;;
   esac
 }
 
 install_node() {
-  install_base_tools
-  if [ "${INSTALL_NODE}" = "0" ] || [ "${INSTALL_NODE}" = "false" ]; then
-    echo "==> 跳过 Node.js 安装"
-    return
-  fi
   if command -v node >/dev/null 2>&1; then
-    node_version="$(node -v)"
-    node_version="${node_version#v}"
-    major="${node_version%%.*}"
+    major="$(node -v | sed 's/^v//' | cut -d. -f1)"
     if [ "${major}" -ge 20 ]; then
-      echo "==> 已检测到 Node.js $(node -v)"
       return
     fi
   fi
 
-  echo "==> 安装 Node.js 20 和 Git"
-  if command -v apt >/dev/null 2>&1; then
-    apt update
-    apt install -y curl ca-certificates gnupg git
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt install -y nodejs
-  elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y nodejs git curl ca-certificates
-  elif command -v yum >/dev/null 2>&1; then
-    yum install -y nodejs git curl ca-certificates
+  case "${PKG_MANAGER}" in
+    apt)
+      curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+      DEBIAN_FRONTEND=noninteractive apt install -y nodejs
+      ;;
+    dnf)
+      curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+      dnf install -y nodejs npm
+      ;;
+    yum)
+      curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
+      yum install -y nodejs npm
+      ;;
+  esac
+
+  command -v node >/dev/null 2>&1 || die "Node.js installation failed"
+  major="$(node -v | sed 's/^v//' | cut -d. -f1)"
+  [ "${major}" -ge 20 ] || die "Node.js 20+ is required, current version is $(node -v)"
+}
+
+random_password() {
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 16
   else
-    echo "未识别的系统包管理器，请手动安装 Node.js 20 和 Git。"
-    exit 1
+    node -e "console.log(require('crypto').randomBytes(18).toString('hex'))"
   fi
 }
 
-start_database_service() {
-  systemctl enable --now mariadb >/dev/null 2>&1 || true
-  systemctl enable --now mysql >/dev/null 2>&1 || true
+validate_mysql_name() {
+  value="$1"
+  label="$2"
+  echo "${value}" | grep -Eq '^[A-Za-z0-9_]+$' || die "${label} can only contain letters, numbers and underscores"
 }
 
-install_local_mysql() {
-  echo "==> 安装本机 MariaDB/MySQL"
-  if command -v mysql >/dev/null 2>&1; then
-    start_database_service
-    return
-  fi
-  if command -v apt >/dev/null 2>&1; then
-    package_install mariadb-server mariadb-client
-  elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
-    package_install mariadb-server mariadb
-  fi
-  start_database_service
+sql_string() {
+  printf "%s" "$1" | sed "s/'/''/g"
+}
+
+start_mysql_service() {
+  for service in mysql mysqld mariadb; do
+    if systemctl list-unit-files "${service}.service" >/dev/null 2>&1; then
+      systemctl enable --now "${service}" >/dev/null 2>&1 || true
+    fi
+    if systemctl is-active --quiet "${service}" >/dev/null 2>&1; then
+      return
+    fi
+  done
+  die "MySQL service is not running. Please check mysql/mariadb installation"
 }
 
 mysql_root_exec() {
-  sql_file="$1"
-  if mysql -uroot -e "SELECT 1" >/dev/null 2>&1; then
-    mysql -uroot < "${sql_file}"
-    return
+  if [ -n "${MYSQL_ROOT_PASSWORD:-}" ]; then
+    MYSQL_PWD="${MYSQL_ROOT_PASSWORD}" mysql -uroot -e "$1"
+  else
+    mysql -uroot -e "$1"
   fi
-  root_password="${MYSQL_ROOT_PASSWORD:-}"
-  if [ -z "${root_password}" ] && can_prompt; then
-    root_password="$(ask_value '请输入 MySQL root 密码，若无密码请直接回车' '' 1)"
-  fi
-  if [ -n "${root_password}" ]; then
-    mysql -uroot -p"${root_password}" < "${sql_file}"
-    return
-  fi
-  echo "无法使用 root 连接 MySQL，请设置 MYSQL_ROOT_PASSWORD 后重试，或先手动创建数据库。"
-  exit 1
 }
 
-create_local_mysql_database() {
-  MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"
-  MYSQL_PORT="${MYSQL_PORT:-3306}"
-  MYSQL_DATABASE="${MYSQL_DATABASE:-shiye_management}"
-  MYSQL_USER="${MYSQL_USER:-shiye}"
-  validate_mysql_identifier '数据库名' "${MYSQL_DATABASE}"
-  validate_mysql_identifier '数据库用户' "${MYSQL_USER}"
-  if [ -z "${MYSQL_PASSWORD:-}" ]; then
-    MYSQL_PASSWORD="$(random_password)"
-  fi
-  case "${MYSQL_PASSWORD}" in
-    *"'"*|*"\\"*|*$'\n'*|*$'\r'*)
-      echo "数据库密码不能包含单引号、反斜杠或换行，请换一个密码，或留空让脚本自动生成。"
-      exit 1
-      ;;
-  esac
-
-  tmp_sql="$(mktemp)"
-  cat > "${tmp_sql}" <<SQL
-CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'127.0.0.1' IDENTIFIED BY '${MYSQL_PASSWORD}';
-CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'localhost' IDENTIFIED BY '${MYSQL_PASSWORD}';
-GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'127.0.0.1';
-GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'localhost';
-FLUSH PRIVILEGES;
-SQL
-  mysql_root_exec "${tmp_sql}"
-  rm -f "${tmp_sql}"
-}
-
-configure_database_interactive() {
-  if ! can_prompt; then
-    return
-  fi
+install_local_mysql_if_needed() {
   if [ -n "${DATABASE_URL:-}" ] || [ -n "${MYSQL_HOST:-}" ]; then
+    log "External MySQL config detected, skipping local MySQL installation"
     return
   fi
 
-  choice="$(ask_choice '请选择数据存储方式' 1 '自动安装本机 MySQL/MariaDB（公开运营推荐）' '连接已有 MySQL 数据库' 'JSON 文件模式（仅测试/个人使用）')"
-  case "${choice}" in
-    1)
-      DB_CLIENT="mysql"
-      MYSQL_HOST="$(ask_value '数据库地址' '127.0.0.1')"
-      MYSQL_PORT="$(ask_value '数据库端口' '3306')"
-      MYSQL_DATABASE="$(ask_value '数据库名' 'shiye_management')"
-      MYSQL_USER="$(ask_value '数据库用户' 'shiye')"
-      MYSQL_PASSWORD="$(ask_value '数据库密码，留空会自动生成' '' 1)"
-      install_local_mysql
-      create_local_mysql_database
-      ;;
-    2)
-      DB_CLIENT="mysql"
-      MYSQL_HOST="$(ask_value '数据库地址' '127.0.0.1')"
-      MYSQL_PORT="$(ask_value '数据库端口' '3306')"
-      MYSQL_DATABASE="$(ask_value '数据库名' 'shiye_management')"
-      MYSQL_USER="$(ask_value '数据库用户' 'shiye')"
-      MYSQL_PASSWORD="$(ask_value '数据库密码' '' 1)"
-      ;;
-    3)
-      DB_CLIENT="json"
-      ;;
-    *)
-      echo "无效选择。"
-      exit 1
-      ;;
-  esac
-}
+  MYSQL_HOST="127.0.0.1"
+  MYSQL_PASSWORD="${MYSQL_PASSWORD:-$(random_password)}"
+  validate_mysql_name "${MYSQL_DATABASE}" "MYSQL_DATABASE"
+  validate_mysql_name "${MYSQL_USER}" "MYSQL_USER"
 
-test_mysql_connection() {
-  if [ "${DB_CLIENT}" != "mysql" ] && [ "${DB_CLIENT}" != "mariadb" ]; then
-    return
+  if ! command -v mysql >/dev/null 2>&1; then
+    log "Installing local MySQL-compatible server"
+    case "${PKG_MANAGER}" in
+      apt)
+        DEBIAN_FRONTEND=noninteractive apt install -y default-mysql-server
+        ;;
+      dnf)
+        dnf install -y mysql-server || dnf install -y mariadb-server
+        ;;
+      yum)
+        yum install -y mysql-server || yum install -y mariadb-server
+        ;;
+    esac
   fi
-  echo "==> 测试 MySQL 连接"
-  node - <<'NODE'
-const mysql = require('mysql2/promise');
-(async () => {
-  const pool = await mysql.createPool({
-    host: process.env.MYSQL_HOST || '127.0.0.1',
-    port: Number(process.env.MYSQL_PORT || 3306),
-    user: process.env.MYSQL_USER || 'shiye',
-    password: process.env.MYSQL_PASSWORD || '',
-    database: process.env.MYSQL_DATABASE || 'shiye_management',
-    waitForConnections: true,
-    connectionLimit: 1,
-    charset: 'utf8mb4'
-  });
-  await pool.query('SELECT 1');
-  await pool.end();
-})().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
-NODE
-}
 
-configure_nginx_interactive() {
-  if ! can_prompt; then
-    INSTALL_NGINX="${INSTALL_NGINX:-0}"
-    SETUP_SSL="${SETUP_SSL:-0}"
-    return
-  fi
-  if [ -z "${INSTALL_NGINX}" ]; then
-    if ask_yes_no '是否安装/配置 Nginx 反向代理' 'n'; then
-      INSTALL_NGINX="1"
-    else
-      INSTALL_NGINX="0"
-    fi
-  fi
-  if is_yes "${INSTALL_NGINX}"; then
-    DOMAIN="$(ask_value '绑定域名，留空则使用服务器 IP 访问' "${DOMAIN}")"
-    if [ -n "${DOMAIN}" ] && [ -z "${SETUP_SSL}" ]; then
-      if ask_yes_no '是否自动申请 HTTPS 证书' 'n'; then
-        SETUP_SSL="1"
-        CERTBOT_EMAIL="$(ask_value '证书邮箱，留空则不填写邮箱' "${CERTBOT_EMAIL}")"
-      else
-        SETUP_SSL="0"
-      fi
-    fi
-  fi
+  start_mysql_service
+
+  db="${MYSQL_DATABASE}"
+  user="${MYSQL_USER}"
+  password="$(sql_string "${MYSQL_PASSWORD}")"
+  mysql_root_exec "CREATE DATABASE IF NOT EXISTS \`${db}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+  mysql_root_exec "CREATE USER IF NOT EXISTS '${user}'@'127.0.0.1' IDENTIFIED BY '${password}';"
+  mysql_root_exec "ALTER USER '${user}'@'127.0.0.1' IDENTIFIED BY '${password}';"
+  mysql_root_exec "GRANT ALL PRIVILEGES ON \`${db}\`.* TO '${user}'@'127.0.0.1'; FLUSH PRIVILEGES;"
 }
 
 install_app_files() {
+  normalize_app_dir
+  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   mkdir -p "${APP_DIR}"
   preserve_dir="$(mktemp -d)"
   if [ -d "${APP_DIR}/data" ]; then
@@ -369,33 +244,24 @@ install_app_files() {
   fi
 
   if [ -n "${REPO_URL}" ]; then
-    if ! command -v git >/dev/null 2>&1; then
-      echo "未检测到 git，请先安装 git 后重试：apt install -y git"
-      exit 1
-    fi
-    if [ -d "${APP_DIR}/.git" ]; then
-      git -C "${APP_DIR}" remote set-url origin "${REPO_URL}" >/dev/null 2>&1 || true
-      git -C "${APP_DIR}" pull --ff-only
-    else
-      tmp_dir="$(mktemp -d)"
-      git clone "${REPO_URL}" "${tmp_dir}/app"
-      find "${APP_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-      cp -a "${tmp_dir}/app/." "${APP_DIR}/"
-      rm -rf "${tmp_dir}"
-    fi
-  else
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    if [ ! -f "${script_dir}/server.js" ]; then
-      echo "远程安装请设置 REPO_URL，例如："
-      echo "curl -fsSL https://raw.githubusercontent.com/你的用户名/你的仓库/main/install.sh -o install.sh"
-      echo "REPO_URL=https://github.com/你的用户名/你的仓库.git bash install.sh"
-      exit 1
-    fi
+    tmp_dir="$(mktemp -d)"
+    git clone --depth 1 "${REPO_URL}" "${tmp_dir}/app"
+    find "${APP_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    cp -a "${tmp_dir}/app/." "${APP_DIR}/"
+    rm -rf "${tmp_dir}"
+  elif [ -f "${script_dir}/server.js" ] && [ -f "${script_dir}/public/app.js" ] && [ -f "${script_dir}/public/user.js" ]; then
     if [ "${script_dir}" != "${APP_DIR}" ]; then
       find "${APP_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
       find "${script_dir}" -mindepth 1 -maxdepth 1 -exec cp -a {} "${APP_DIR}/" \;
     fi
+  else
+    tmp_dir="$(mktemp -d)"
+    git clone --depth 1 "${DEFAULT_REPO_URL}" "${tmp_dir}/app"
+    find "${APP_DIR}" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+    cp -a "${tmp_dir}/app/." "${APP_DIR}/"
+    rm -rf "${tmp_dir}"
   fi
+
   if [ -d "${preserve_dir}/data" ]; then
     rm -rf "${APP_DIR}/data"
     cp -a "${preserve_dir}/data" "${APP_DIR}/data"
@@ -406,33 +272,32 @@ install_app_files() {
 
 install_dependencies() {
   cd "${APP_DIR}"
-  npm install --omit=dev
+  if [ -f package-lock.json ]; then
+    npm ci --omit=dev || npm install --omit=dev
+  else
+    npm install --omit=dev
+  fi
+}
+
+existing_secret() {
+  if [ -n "${APP_SECRET:-}" ]; then
+    printf "%s" "${APP_SECRET}"
+  elif [ -n "${SHIYE_SECRET:-}" ]; then
+    printf "%s" "${SHIYE_SECRET}"
+  elif [ -f "${ENV_FILE}" ]; then
+    grep -E '^APP_SECRET=' "${ENV_FILE}" | tail -n 1 | sed 's/^APP_SECRET=//' | sed 's/^"//' | sed 's/"$//' || true
+  elif [ -f "${APP_DIR}/data/.secret" ]; then
+    tr -d '\r\n' < "${APP_DIR}/data/.secret"
+  fi
 }
 
 write_service() {
-  existing_secret=""
-  if [ -n "${APP_SECRET:-}" ]; then
-    existing_secret="${APP_SECRET}"
-  elif [ -n "${SHIYE_SECRET:-}" ]; then
-    existing_secret="${SHIYE_SECRET}"
-  elif [ -f "${ENV_FILE}" ]; then
-    while IFS= read -r line; do
-      case "${line}" in
-        APP_SECRET=*) existing_secret="${line#APP_SECRET=}" ;;
-      esac
-    done < "${ENV_FILE}"
-    existing_secret="${existing_secret%\"}"
-    existing_secret="${existing_secret#\"}"
-  elif [ -f "${APP_DIR}/data/.secret" ]; then
-    existing_secret="$(tr -d '\r\n' < "${APP_DIR}/data/.secret")"
+  secret="$(existing_secret)"
+  if [ -z "${secret}" ]; then
+    secret="$(random_password)$(random_password)"
   fi
-  if [ -z "${existing_secret}" ]; then
-    if command -v openssl >/dev/null 2>&1; then
-      existing_secret="$(openssl rand -hex 32)"
-    else
-      existing_secret="$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")"
-    fi
-  fi
+  NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
+  [ -n "${NODE_BIN}" ] || die "node binary was not found"
 
   write_env_var() {
     key="$1"
@@ -445,17 +310,16 @@ write_service() {
   {
     write_env_var PORT "${PORT}"
     write_env_var ADMIN_PATH "${ADMIN_PATH}"
-    write_env_var DB_CLIENT "${DB_CLIENT}"
-    write_env_var APP_SECRET "${existing_secret}"
+    write_env_var APP_SECRET "${secret}"
     write_env_var DATABASE_URL "${DATABASE_URL:-}"
     write_env_var MYSQL_HOST "${MYSQL_HOST:-127.0.0.1}"
-    write_env_var MYSQL_PORT "${MYSQL_PORT:-3306}"
-    write_env_var MYSQL_USER "${MYSQL_USER:-shiye}"
+    write_env_var MYSQL_PORT "${MYSQL_PORT}"
+    write_env_var MYSQL_USER "${MYSQL_USER}"
     write_env_var MYSQL_PASSWORD "${MYSQL_PASSWORD:-}"
-    write_env_var MYSQL_DATABASE "${MYSQL_DATABASE:-shiye_management}"
-    write_env_var MYSQL_CONNECTION_LIMIT "${MYSQL_CONNECTION_LIMIT:-10}"
+    write_env_var MYSQL_DATABASE "${MYSQL_DATABASE}"
+    write_env_var MYSQL_CONNECTION_LIMIT "${MYSQL_CONNECTION_LIMIT}"
     write_env_var REDIS_URL "${REDIS_URL:-}"
-    write_env_var SESSION_PREFIX "${SESSION_PREFIX:-shiye:session:}"
+    write_env_var SESSION_PREFIX "${SESSION_PREFIX}"
   } > "${ENV_FILE}"
   chmod 600 "${ENV_FILE}"
 
@@ -468,7 +332,7 @@ After=network.target
 Type=simple
 WorkingDirectory=${APP_DIR}
 EnvironmentFile=${ENV_FILE}
-ExecStart=/usr/bin/node server.js
+ExecStart=${NODE_BIN} server.js
 Restart=always
 RestartSec=3
 
@@ -477,23 +341,33 @@ WantedBy=multi-user.target
 SERVICE
 }
 
-install_nginx() {
-  if ! is_yes "${INSTALL_NGINX:-0}"; then
-    return
-  fi
-  echo "==> 安装/配置 Nginx"
+validate_domain() {
+  [ -n "${DOMAIN}" ] || die "DOMAIN is required when Nginx is enabled"
+  echo "${DOMAIN}" | grep -Eq '^[A-Za-z0-9.-]+$' || die "DOMAIN can only contain letters, numbers, dots and hyphens"
+  echo "${DOMAIN}" | grep -Eq '\.' || die "DOMAIN must be a valid domain name, for example example.com"
+}
+
+install_nginx_package() {
   if ! command -v nginx >/dev/null 2>&1; then
-    package_install nginx
+    log "Installing Nginx"
+    install_package nginx
   fi
   systemctl enable --now nginx >/dev/null 2>&1 || true
-  server_name="_"
-  if [ -n "${DOMAIN}" ]; then
-    server_name="${DOMAIN}"
+}
+
+write_nginx_config() {
+  validate_domain
+  install_nginx_package
+
+  nginx_conf="/etc/nginx/conf.d/${APP_NAME}.conf"
+  if [ -d /etc/nginx/sites-available ] && [ -d /etc/nginx/sites-enabled ]; then
+    nginx_conf="/etc/nginx/sites-available/${APP_NAME}.conf"
   fi
-  cat > "/etc/nginx/conf.d/${APP_NAME}.conf" <<NGINX
+
+  cat > "${nginx_conf}" <<NGINX
 server {
     listen 80;
-    server_name ${server_name};
+    server_name ${DOMAIN};
 
     client_max_body_size 20m;
 
@@ -509,139 +383,152 @@ server {
     }
 }
 NGINX
+
+  if [ -d /etc/nginx/sites-enabled ]; then
+    ln -sfn "${nginx_conf}" "/etc/nginx/sites-enabled/${APP_NAME}.conf"
+  fi
+
   nginx -t
   systemctl reload nginx
 }
 
 install_certbot() {
-  if ! is_yes "${SETUP_SSL:-0}"; then
+  if command -v certbot >/dev/null 2>&1; then
     return
   fi
-  if [ -z "${DOMAIN}" ]; then
-    echo "未填写域名，跳过证书申请。"
-    return
-  fi
-  echo "==> 安装 Certbot 并申请 HTTPS 证书"
-  if command -v apt >/dev/null 2>&1; then
-    package_install certbot python3-certbot-nginx
-  elif command -v dnf >/dev/null 2>&1 || command -v yum >/dev/null 2>&1; then
-    package_install certbot python3-certbot-nginx
-  fi
+
+  log "Installing Certbot"
+  case "${PKG_MANAGER}" in
+    apt)
+      DEBIAN_FRONTEND=noninteractive apt install -y certbot python3-certbot-nginx
+      ;;
+    dnf|yum)
+      install_package epel-release || true
+      install_package certbot
+      install_package python3-certbot-nginx || true
+      ;;
+  esac
+}
+
+request_certificate() {
+  validate_domain
+  install_certbot
+
+  email_args=(--register-unsafely-without-email)
   if [ -n "${CERTBOT_EMAIL}" ]; then
-    certbot --nginx -d "${DOMAIN}" --redirect --agree-tos -m "${CERTBOT_EMAIL}" --non-interactive
-  else
-    certbot --nginx -d "${DOMAIN}" --redirect --agree-tos --register-unsafely-without-email --non-interactive
+    email_args=(--email "${CERTBOT_EMAIL}")
+  fi
+
+  certbot --nginx -d "${DOMAIN}" --non-interactive --agree-tos "${email_args[@]}" --redirect
+  systemctl reload nginx
+}
+
+prompt_optional_nginx() {
+  INSTALL_NGINX_SELECTED=0
+  INSTALL_HTTPS_SELECTED=0
+
+  if is_yes "${ENABLE_NGINX}"; then
+    INSTALL_NGINX_SELECTED=1
+  elif is_no "${ENABLE_NGINX}"; then
+    INSTALL_NGINX_SELECTED=0
+  elif ask_yes_no "Install Nginx reverse proxy and use domain access?" "no"; then
+    INSTALL_NGINX_SELECTED=1
+  fi
+
+  if [ "${INSTALL_NGINX_SELECTED}" -ne 1 ]; then
+    return
+  fi
+
+  if [ -z "${DOMAIN}" ] && [ -t 0 ]; then
+    read -r -p "Domain name, for example panel.example.com: " DOMAIN
+  fi
+  validate_domain
+
+  if is_yes "${ENABLE_HTTPS}"; then
+    INSTALL_HTTPS_SELECTED=1
+  elif is_no "${ENABLE_HTTPS}"; then
+    INSTALL_HTTPS_SELECTED=0
+  elif ask_yes_no "Apply for a Let's Encrypt HTTPS certificate now?" "yes"; then
+    INSTALL_HTTPS_SELECTED=1
   fi
 }
 
-print_summary() {
-  ip_addr="$(hostname -I 2>/dev/null | awk '{print $1}')"
-  nginx_conf="/etc/nginx/conf.d/${APP_NAME}.conf"
-  if is_yes "${INSTALL_NGINX:-0}" && [ -n "${DOMAIN}" ]; then
-    scheme="http"
-    if is_yes "${SETUP_SSL:-0}"; then
-      scheme="https"
-    fi
-    user_url="${scheme}://${DOMAIN}/"
-    admin_url="${scheme}://${DOMAIN}${ADMIN_PATH}"
-  else
-    user_url="http://${ip_addr:-服务器IP}:${PORT}/"
-    admin_url="http://${ip_addr:-服务器IP}:${PORT}${ADMIN_PATH}"
+configure_optional_nginx() {
+  prompt_optional_nginx
+  if [ "${INSTALL_NGINX_SELECTED}" -ne 1 ]; then
+    return
   fi
-  echo
-  echo "============================================================"
-  echo "十夜管理系统安装完成，请复制保存以下信息"
-  echo "============================================================"
-  echo "用户入口：${user_url}"
-  echo "管理员入口：${admin_url}"
-  echo "默认管理员账号：admin"
-  echo "默认管理员密码：admin123"
-  echo ""
-  echo "项目信息："
-  echo "安装脚本版本：${INSTALLER_VERSION}"
-  echo "GitHub 仓库：${REPO_URL}"
-  echo "项目目录：${APP_DIR}"
-  echo "运行端口：${PORT}"
-  echo "管理员路径：${ADMIN_PATH}"
-  echo "服务名称：${APP_NAME}"
-  echo "服务配置：${SERVICE_FILE}"
-  echo "环境配置：${ENV_FILE}"
-  echo "数据存储：${DB_CLIENT}"
-  if [ "${DB_CLIENT}" = "mysql" ] || [ "${DB_CLIENT}" = "mariadb" ]; then
-    echo ""
-    echo "MySQL 连接信息："
-    echo "数据库地址：${MYSQL_HOST:-127.0.0.1}"
-    echo "数据库端口：${MYSQL_PORT:-3306}"
-    echo "数据库名称：${MYSQL_DATABASE:-shiye_management}"
-    echo "数据库账号：${MYSQL_USER:-shiye}"
-    echo "数据库密码：${MYSQL_PASSWORD:-}"
+
+  log "Configuring Nginx reverse proxy for ${DOMAIN}"
+  write_nginx_config
+
+  if [ "${INSTALL_HTTPS_SELECTED}" -eq 1 ]; then
+    log "Requesting HTTPS certificate for ${DOMAIN}"
+    request_certificate
   fi
-  if is_yes "${INSTALL_NGINX:-0}"; then
-    echo ""
-    echo "Nginx 信息："
-    echo "Nginx 配置：${nginx_conf}"
-    echo "绑定域名：${DOMAIN:-未绑定域名，使用服务器 IP}"
-    if is_yes "${SETUP_SSL:-0}" && [ -n "${DOMAIN}" ]; then
-      echo "HTTPS 证书：已申请"
-    else
-      echo "HTTPS 证书：未申请"
-    fi
-  fi
-  echo
-  echo "常用命令："
-  echo "systemctl status ${APP_NAME}"
-  echo "systemctl restart ${APP_NAME}"
-  echo "journalctl -u ${APP_NAME} -f"
-  echo ""
-  echo "说明：本系统基于 3-xui 面板 3.4.1 版本开发和测试。"
-  echo "公网部署建议登录后立即进入账号安全修改管理员密码。"
-  echo "============================================================"
 }
 
 main() {
-  echo "==> 十夜管理系统安装向导 ${INSTALLER_VERSION}"
-  echo "==> 默认仓库：${REPO_URL}"
-  if can_prompt; then
-    PORT="$(ask_value '项目运行端口' "${PORT}")"
-    ADMIN_PATH="$(normalize_route_path "$(ask_value '管理员入口路径' "${ADMIN_PATH}")")"
-    APP_DIR="$(ask_value '安装目录' "${APP_DIR}")"
-  fi
+  require_root
+  detect_pkg_manager
 
-  configure_database_interactive
-  configure_nginx_interactive
+  log "Installing base packages"
+  install_base_packages
 
+  log "Checking Node.js 20+"
   install_node
 
-  echo "==> 安装项目文件到 ${APP_DIR}"
+  log "Checking MySQL"
+  install_local_mysql_if_needed
+
+  log "Installing project files to ${APP_DIR}"
   install_app_files
 
-  echo "==> 安装项目依赖"
+  log "Installing Node.js dependencies"
   install_dependencies
 
-  export MYSQL_HOST="${MYSQL_HOST:-127.0.0.1}"
-  export MYSQL_PORT="${MYSQL_PORT:-3306}"
-  export MYSQL_USER="${MYSQL_USER:-shiye}"
-  export MYSQL_PASSWORD="${MYSQL_PASSWORD:-}"
-  export MYSQL_DATABASE="${MYSQL_DATABASE:-shiye_management}"
-  test_mysql_connection
-
-  echo "==> 检查语法"
+  log "Checking JavaScript syntax"
   cd "${APP_DIR}"
   node --check server.js
   node --check public/app.js
+  node --check public/user.js
 
-  echo "==> 写入 systemd 服务"
+  log "Writing systemd service"
   write_service
   systemctl daemon-reload
   systemctl enable "${APP_NAME}"
   systemctl restart "${APP_NAME}"
 
-  install_nginx
-  install_certbot
+  configure_optional_nginx
 
-  echo "==> 服务状态"
+  log "Service status"
   systemctl --no-pager --full status "${APP_NAME}" || true
-  print_summary
+
+  ip_addr="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  public_base_url="http://${ip_addr:-SERVER_IP}:${PORT}"
+  if [ "${INSTALL_NGINX_SELECTED:-0}" -eq 1 ]; then
+    public_base_url="http://${DOMAIN}"
+    if [ "${INSTALL_HTTPS_SELECTED:-0}" -eq 1 ]; then
+      public_base_url="https://${DOMAIN}"
+    fi
+  fi
+  echo
+  echo "Installation complete."
+  echo "User URL:  ${public_base_url}/"
+  echo "Admin URL: ${public_base_url}${ADMIN_PATH}"
+  echo "Storage: MySQL"
+  if [ "${INSTALL_NGINX_SELECTED:-0}" -eq 1 ]; then
+    echo "Nginx: enabled for ${DOMAIN}"
+  else
+    echo "Nginx: skipped, direct HTTP port access is enabled"
+  fi
+  echo "Default admin username: admin"
+  echo "Default admin password: admin123"
+  echo
+  echo "Useful commands:"
+  echo "systemctl status ${APP_NAME}"
+  echo "systemctl restart ${APP_NAME}"
+  echo "journalctl -u ${APP_NAME} -f"
 }
 
 main "$@"

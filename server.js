@@ -4,16 +4,15 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import QRCode from 'qrcode';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_FILE = path.join(__dirname, 'data', 'db.json');
 const APP_CONFIG_FILE = path.join(__dirname, 'data', 'config.json');
 const SECRET_FILE = path.join(__dirname, 'data', '.secret');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const PORT = Number(process.env.PORT || 3388);
 let currentAdminPath = normalizeRoutePath(process.env.ADMIN_PATH || '/admin');
 let runtimeConfig = readRuntimeConfigSync();
-let DB_CLIENT = resolveDbClient();
 const DEFAULT_ADMIN_USER = process.env.ADMIN_USER || 'admin';
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'admin123';
 const INBOUND_TEMPLATES = new Set(['vless-tcp', 'vless-reality', 'vless-tls', 'vless-ws', 'vless-grpc']);
@@ -29,7 +28,6 @@ const sessions = new Map();
 const loginAttempts = new Map();
 let mysqlPool = null;
 let redisClient = null;
-let qrCodeModule = null;
 let apiWriteQueue = Promise.resolve();
 let setupRequired = false;
 
@@ -143,15 +141,6 @@ function readRuntimeConfigSync() {
   }
 }
 
-function resolveDbClient() {
-  return String(
-    process.env.DB_CLIENT
-    || process.env.DATABASE_CLIENT
-    || runtimeConfig.db?.client
-    || (process.env.MYSQL_HOST || process.env.DATABASE_URL || runtimeConfig.mysql ? 'mysql' : 'json')
-  ).toLowerCase();
-}
-
 function runtimeMysqlOptions(config = runtimeConfig) {
   if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
   const mysql = config.mysql || {};
@@ -171,14 +160,9 @@ function hasConfiguredMysql() {
   return Boolean(process.env.DATABASE_URL || process.env.MYSQL_HOST || runtimeConfig.mysql);
 }
 
-function hasExplicitDbClient() {
-  return Boolean(process.env.DB_CLIENT || process.env.DATABASE_CLIENT || runtimeConfig.db?.client);
-}
-
 function isInstalled() {
   if (runtimeConfig.installed || runtimeConfig.mysql) return true;
   if (process.env.DATABASE_URL || process.env.MYSQL_HOST) return true;
-  if (hasExplicitDbClient()) return true;
   return false;
 }
 
@@ -186,7 +170,7 @@ async function writeRuntimeConfig(config) {
   await fs.mkdir(path.dirname(APP_CONFIG_FILE), { recursive: true });
   const safe = {
     installed: Boolean(config.installed),
-    db: { client: String(config.db?.client || 'mysql').toLowerCase() },
+    db: { client: 'mysql' },
     mysql: config.mysql ? {
       host: String(config.mysql.host || '').trim(),
       port: Number(config.mysql.port || 3306),
@@ -199,11 +183,6 @@ async function writeRuntimeConfig(config) {
   };
   await fs.writeFile(APP_CONFIG_FILE, JSON.stringify(safe, null, 2), 'utf8');
   runtimeConfig = safe;
-  DB_CLIENT = resolveDbClient();
-}
-
-function isMysqlStorage() {
-  return DB_CLIENT === 'mysql' || DB_CLIENT === 'mariadb';
 }
 
 async function ensureSecret() {
@@ -305,47 +284,293 @@ function gbToBytes(gb) {
   return Math.max(0, Number(gb || 0)) * 1024 * 1024 * 1024;
 }
 
-function customerStatus(customer) {
-  if (customer.status === 'disabled') return 'disabled';
-  if (!customer.expireAt) return customer.status || 'active';
-  const ms = new Date(customer.expireAt).getTime() - Date.now();
+function expiryStatus(expireAt, status = 'active') {
+  if (status === 'disabled') return 'disabled';
+  if (!expireAt) return status || 'active';
+  const ms = new Date(expireAt).getTime() - Date.now();
   if (ms < 0) return 'expired';
   if (ms <= 3 * 24 * 60 * 60 * 1000) return 'warning';
   return 'active';
 }
 
+function customerStatus(customer) {
+  return customer?.status === 'disabled' ? 'disabled' : 'active';
+}
+
+function normalizeRechargeAmounts(value) {
+  const source = Array.isArray(value) ? value : String(value || '').split(/[\s,，]+/);
+  const amounts = source
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item) && item > 0)
+    .map((item) => Number(item.toFixed(2)));
+  return [...new Set(amounts)].slice(0, 12);
+}
+
+function normalizePaymentUrl(value, stripTrailingSlash = false) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  return stripTrailingSlash ? text.replace(/\/+$/, '') : text;
+}
+
+const DEFAULT_EPAY_TYPES = Object.freeze({
+  alipay: 'alipay',
+  wxpay: 'wxpay',
+  paypal: 'paypal',
+  usdt: 'usdt.trc20'
+});
+
+const DEFAULT_BEPUSDT_TRADE_TYPE = 'usdt.trc20';
+
+function normalizeEpayPayType(value, fallback = '') {
+  const text = String(value || '').trim();
+  if (!text) return fallback;
+  return /^[a-zA-Z0-9._\-|]+$/.test(text) ? text : fallback;
+}
+
+function sameEpayPayType(expected, actual) {
+  const left = normalizeEpayPayType(expected).toLowerCase();
+  const right = normalizeEpayPayType(actual).toLowerCase();
+  if (!left || !right) return false;
+  if (left === right) return true;
+  const aliases = {
+    usdt: 'usdt.trc20',
+    trc20: 'usdt.trc20',
+    'usdt-trc20': 'usdt.trc20',
+    usdt_trc20: 'usdt.trc20',
+    bepusdt: 'usdt.trc20'
+  };
+  return (aliases[left] || left) === (aliases[right] || right);
+}
+
+function normalizeBepusdtTradeType(value) {
+  return normalizeEpayPayType(value, DEFAULT_BEPUSDT_TRADE_TYPE);
+}
+
+function normalizeWechatSerialNo(value) {
+  return String(value || '').trim().replace(/\s+/g, '');
+}
+
+function normalizePaymentSettings(input = {}, existing = {}) {
+  const submitted = hasField(input, 'paymentSettingsSubmitted');
+  const toBool = (value) => value === true || value === 1 || ['1', 'true', 'on', 'yes'].includes(String(value || '').toLowerCase());
+  const readFlag = (flatField, nestedSource, nestedField, fallback = false) => {
+    if (hasField(input, flatField)) return toBool(input[flatField]);
+    if (hasField(nestedSource || {}, nestedField)) return toBool(nestedSource[nestedField]);
+    return submitted ? false : Boolean(fallback);
+  };
+  const readSecret = (field, currentEnc = '') => {
+    if (!hasField(input, field)) return currentEnc || existing[field] || '';
+    const raw = String(input[field] || '');
+    if (!raw || raw === maskSecret(currentEnc)) return currentEnc || '';
+    return encrypt(raw);
+  };
+  const amountInput = hasField(input, 'paymentAmounts') ? input.paymentAmounts : (hasField(input, 'amounts') ? input.amounts : existing.amounts);
+  const amounts = normalizeRechargeAmounts(amountInput);
+  const paymentEnabled = hasField(input, 'paymentsEnabled') ? toBool(input.paymentsEnabled) : (hasField(input, 'enabled') ? toBool(input.enabled) : existing.enabled ?? false);
+  const epaySignType = String(input.epay?.signType || input.epaySignType || existing.epay?.signType || 'MD5').toUpperCase();
+  const bepusdtSource = input.bepusdt || {};
+  const wechatSource = input.wechat || {};
+  return {
+    enabled: Boolean(paymentEnabled),
+    siteUrl: normalizePaymentUrl(input.paymentSiteUrl ?? input.siteUrl ?? existing.siteUrl, true),
+    minAmount: Math.max(0.01, Number(hasField(input, 'paymentMinAmount') ? input.paymentMinAmount : (hasField(input, 'minAmount') ? input.minAmount : existing.minAmount || 1))),
+    amounts: amounts.length ? amounts : [10, 30, 50, 100],
+    epay: {
+      enabled: readFlag('epayEnabled', input.epay, 'enabled', existing.epay?.enabled ?? false),
+      gateway: String(input.epay?.gateway ?? input.epayGateway ?? existing.epay?.gateway ?? '').trim().replace(/\/+$/, ''),
+      notifyUrl: normalizePaymentUrl(input.epay?.notifyUrl ?? input.epayNotifyUrl ?? existing.epay?.notifyUrl),
+      returnUrl: normalizePaymentUrl(input.epay?.returnUrl ?? input.epayReturnUrl ?? existing.epay?.returnUrl),
+      pid: String(input.epay?.pid ?? input.epayPid ?? existing.epay?.pid ?? '').trim(),
+      signType: ['MD5', 'RSA'].includes(epaySignType) ? epaySignType : 'MD5',
+      merchantKeyEnc: readSecret('epayMerchantKey', input.epay?.merchantKeyEnc || existing.epay?.merchantKeyEnc || existing.epayMerchantKey || ''),
+      privateKeyEnc: readSecret('epayPrivateKey', input.epay?.privateKeyEnc || existing.epay?.privateKeyEnc || existing.epayPrivateKey || ''),
+      publicKeyEnc: readSecret('epayPublicKey', input.epay?.publicKeyEnc || existing.epay?.publicKeyEnc || existing.epayPublicKey || ''),
+      methods: {
+        alipay: readFlag('epayMethodAlipay', input.epay?.methods, 'alipay', existing.epay?.methods?.alipay ?? true),
+        wxpay: readFlag('epayMethodWxpay', input.epay?.methods, 'wxpay', existing.epay?.methods?.wxpay ?? true),
+        paypal: readFlag('epayMethodPaypal', input.epay?.methods, 'paypal', existing.epay?.methods?.paypal ?? false),
+        usdt: readFlag('epayMethodUsdt', input.epay?.methods, 'usdt', existing.epay?.methods?.usdt ?? true)
+      },
+      types: {
+        alipay: normalizeEpayPayType(input.epay?.types?.alipay ?? input.epayTypeAlipay ?? existing.epay?.types?.alipay, DEFAULT_EPAY_TYPES.alipay),
+        wxpay: normalizeEpayPayType(input.epay?.types?.wxpay ?? input.epayTypeWxpay ?? existing.epay?.types?.wxpay, DEFAULT_EPAY_TYPES.wxpay),
+        paypal: normalizeEpayPayType(input.epay?.types?.paypal ?? input.epayTypePaypal ?? existing.epay?.types?.paypal, DEFAULT_EPAY_TYPES.paypal),
+        usdt: normalizeEpayPayType(input.epay?.types?.usdt ?? input.epayTypeUsdt ?? existing.epay?.types?.usdt, DEFAULT_EPAY_TYPES.usdt)
+      }
+    },
+    alipay: {
+      enabled: readFlag('alipayEnabled', input.alipay, 'enabled', existing.alipay?.enabled ?? false),
+      gateway: String(input.alipay?.gateway ?? input.alipayGateway ?? existing.alipay?.gateway ?? 'https://openapi.alipay.com/gateway.do').trim() || 'https://openapi.alipay.com/gateway.do',
+      notifyUrl: normalizePaymentUrl(input.alipay?.notifyUrl ?? input.alipayNotifyUrl ?? existing.alipay?.notifyUrl),
+      returnUrl: normalizePaymentUrl(input.alipay?.returnUrl ?? input.alipayReturnUrl ?? existing.alipay?.returnUrl),
+      appId: String(input.alipay?.appId ?? input.alipayAppId ?? existing.alipay?.appId ?? '').trim(),
+      appPrivateKeyEnc: readSecret('alipayAppPrivateKey', input.alipay?.appPrivateKeyEnc || existing.alipay?.appPrivateKeyEnc || existing.alipayAppPrivateKey || ''),
+      alipayPublicKeyEnc: readSecret('alipayPublicKey', input.alipay?.alipayPublicKeyEnc || existing.alipay?.alipayPublicKeyEnc || existing.alipayPublicKey || ''),
+      methods: {
+        page: readFlag('alipayMethodPage', input.alipay?.methods, 'page', existing.alipay?.methods?.page ?? true),
+        wap: readFlag('alipayMethodWap', input.alipay?.methods, 'wap', existing.alipay?.methods?.wap ?? false),
+        precreate: readFlag('alipayMethodPrecreate', input.alipay?.methods, 'precreate', existing.alipay?.methods?.precreate ?? false)
+      }
+    },
+    bepusdt: {
+      enabled: readFlag('bepusdtEnabled', bepusdtSource, 'enabled', existing.bepusdt?.enabled ?? false),
+      appUrl: normalizePaymentUrl(bepusdtSource.appUrl ?? input.bepusdtAppUrl ?? existing.bepusdt?.appUrl, true),
+      notifyUrl: normalizePaymentUrl(bepusdtSource.notifyUrl ?? input.bepusdtNotifyUrl ?? existing.bepusdt?.notifyUrl),
+      returnUrl: normalizePaymentUrl(bepusdtSource.returnUrl ?? input.bepusdtReturnUrl ?? existing.bepusdt?.returnUrl),
+      tradeType: normalizeBepusdtTradeType(bepusdtSource.tradeType ?? input.bepusdtTradeType ?? existing.bepusdt?.tradeType),
+      tokenEnc: readSecret('bepusdtToken', bepusdtSource.tokenEnc || existing.bepusdt?.tokenEnc || existing.bepusdtToken || '')
+    },
+    wechat: {
+      enabled: readFlag('wechatEnabled', wechatSource, 'enabled', existing.wechat?.enabled ?? false),
+      methods: {
+        native: readFlag('wechatMethodNative', wechatSource.methods, 'native', existing.wechat?.methods?.native ?? true),
+        h5: readFlag('wechatMethodH5', wechatSource.methods, 'h5', existing.wechat?.methods?.h5 ?? false)
+      },
+      appId: String(wechatSource.appId ?? input.wechatAppId ?? existing.wechat?.appId ?? '').trim(),
+      mchId: String(wechatSource.mchId ?? input.wechatMchId ?? existing.wechat?.mchId ?? '').trim(),
+      apiV3KeyEnc: readSecret('wechatApiV3Key', wechatSource.apiV3KeyEnc || existing.wechat?.apiV3KeyEnc || existing.wechatApiV3Key || ''),
+      merchantSerialNo: normalizeWechatSerialNo(wechatSource.merchantSerialNo ?? input.wechatMerchantSerialNo ?? wechatSource.serialNo ?? input.wechatSerialNo ?? existing.wechat?.merchantSerialNo ?? existing.wechat?.serialNo),
+      platformSerialNo: normalizeWechatSerialNo(wechatSource.platformSerialNo ?? input.wechatPlatformSerialNo ?? input.wechatPublicKeyId ?? existing.wechat?.platformSerialNo ?? existing.wechat?.publicKeyId),
+      merchantPrivateKeyEnc: readSecret('wechatMerchantPrivateKey', wechatSource.merchantPrivateKeyEnc || existing.wechat?.merchantPrivateKeyEnc || existing.wechat?.privateKeyEnc || existing.wechatMerchantPrivateKey || ''),
+      platformPublicKeyEnc: readSecret('wechatPlatformPublicKey', wechatSource.platformPublicKeyEnc || existing.wechat?.platformPublicKeyEnc || existing.wechatPlatformPublicKey || ''),
+      notifyUrl: normalizePaymentUrl(wechatSource.notifyUrl ?? input.wechatNotifyUrl ?? existing.wechat?.notifyUrl),
+      returnUrl: normalizePaymentUrl(wechatSource.returnUrl ?? input.wechatReturnUrl ?? existing.wechat?.returnUrl),
+      description: String(wechatSource.description ?? input.wechatDescription ?? existing.wechat?.description ?? 'Account balance recharge').trim() || 'Account balance recharge'
+    }
+  };
+}
+
+function publicPaymentSettings(settings = {}) {
+  const payments = normalizePaymentSettings({}, settings);
+  return {
+    enabled: payments.enabled,
+    siteUrl: payments.siteUrl,
+    minAmount: payments.minAmount,
+    amounts: payments.amounts,
+    epay: {
+      enabled: payments.epay.enabled,
+      gateway: payments.epay.gateway,
+      notifyUrl: payments.epay.notifyUrl,
+      returnUrl: payments.epay.returnUrl,
+      pid: payments.epay.pid,
+      signType: payments.epay.signType,
+      merchantKey: maskSecret(payments.epay.merchantKeyEnc),
+      privateKey: maskSecret(payments.epay.privateKeyEnc),
+      publicKey: maskSecret(payments.epay.publicKeyEnc),
+      methods: { ...payments.epay.methods },
+      types: { ...payments.epay.types }
+    },
+    alipay: {
+      enabled: payments.alipay.enabled,
+      gateway: payments.alipay.gateway,
+      notifyUrl: payments.alipay.notifyUrl,
+      returnUrl: payments.alipay.returnUrl,
+      appId: payments.alipay.appId,
+      appPrivateKey: maskSecret(payments.alipay.appPrivateKeyEnc),
+      alipayPublicKey: maskSecret(payments.alipay.alipayPublicKeyEnc),
+      methods: { ...payments.alipay.methods }
+    },
+    bepusdt: {
+      enabled: payments.bepusdt.enabled,
+      appUrl: payments.bepusdt.appUrl,
+      notifyUrl: payments.bepusdt.notifyUrl,
+      returnUrl: payments.bepusdt.returnUrl,
+      tradeType: payments.bepusdt.tradeType,
+      token: maskSecret(payments.bepusdt.tokenEnc)
+    },
+    wechat: {
+      enabled: payments.wechat.enabled,
+      methods: { ...payments.wechat.methods },
+      appId: payments.wechat.appId,
+      mchId: payments.wechat.mchId,
+      apiV3Key: maskSecret(payments.wechat.apiV3KeyEnc),
+      merchantSerialNo: payments.wechat.merchantSerialNo,
+      platformSerialNo: payments.wechat.platformSerialNo,
+      merchantPrivateKey: maskSecret(payments.wechat.merchantPrivateKeyEnc),
+      platformPublicKey: maskSecret(payments.wechat.platformPublicKeyEnc),
+      notifyUrl: payments.wechat.notifyUrl,
+      returnUrl: payments.wechat.returnUrl,
+      description: payments.wechat.description
+    }
+  };
+}
+
+function publicUserPaymentSettings(settings = {}) {
+  const payments = normalizePaymentSettings({}, settings);
+  const methods = [];
+  const hasAlipay = payments.epay.enabled && payments.epay.methods.alipay
+    || payments.alipay.enabled && Object.values(payments.alipay.methods || {}).some(Boolean);
+  const hasWechat = payments.wechat.enabled && Object.values(payments.wechat.methods || {}).some(Boolean) || payments.epay.enabled && payments.epay.methods.wxpay;
+  const hasPaypal = payments.epay.enabled && payments.epay.methods.paypal;
+  const hasUsdt = payments.bepusdt.enabled || payments.epay.enabled && payments.epay.methods.usdt;
+  if (hasAlipay) methods.push({ id: 'alipay', label: '支付宝' });
+  if (hasWechat) methods.push({ id: 'wechat', label: '微信支付' });
+  if (hasPaypal) methods.push({ id: 'paypal', label: 'PayPal' });
+  if (hasUsdt) methods.push({ id: 'usdt', label: 'USDT' });
+  return { enabled: payments.enabled && methods.length > 0, minAmount: payments.minAmount, amounts: payments.amounts, methods };
+}
+
+function normalizeRechargeOrder(input = {}, existing = {}) {
+  return {
+    ...existing,
+    id: existing.id || input.id || id('pay'),
+    tradeNo: String(input.tradeNo || existing.tradeNo || '').trim() || `pay${Date.now()}${crypto.randomBytes(6).toString('hex')}`,
+    customerId: String(input.customerId || existing.customerId || '').trim(),
+    customerName: String(input.customerName || existing.customerName || '').trim(),
+    provider: String(input.provider || existing.provider || '').trim(),
+    method: String(input.method || existing.method || '').trim(),
+    payType: String(input.payType || existing.payType || '').trim(),
+    amount: Number(Number(input.amount ?? existing.amount ?? 0).toFixed(2)),
+    status: String(input.status || existing.status || 'pending').trim(),
+    channelTradeNo: String(input.channelTradeNo || existing.channelTradeNo || '').trim(),
+    rawNotify: input.rawNotify ?? existing.rawNotify ?? null,
+    createdAt: existing.createdAt || input.createdAt || nowIso(),
+    paidAt: input.paidAt || existing.paidAt || '',
+    updatedAt: nowIso()
+  };
+}
+
 function normalizeDb(db = {}) {
   db.customers ||= [];
   db.xuiServers ||= [];
+  db.serviceNodes ||= [];
+  db.customerNodes ||= [];
   db.socksNodes ||= [];
   db.cards ||= [];
   db.cardBatches ||= [];
+  db.rechargeOrders ||= [];
   db.balanceLogs ||= [];
   db.renewalLogs ||= [];
   db.syncLogs ||= [];
   db.settings ||= { currency: 'CNY', expiryWarningDays: 3 };
+  db.settings.brandName = normalizeBrandName(db.settings.brandName);
+  db.settings.logoDataUrl = normalizeLogoDataUrl(db.settings.logoDataUrl || '');
   db.settings.currency ||= 'CNY';
   db.settings.expiryWarningDays = Number(db.settings.expiryWarningDays ?? 3);
   db.settings.purchaseCardUrl ||= '';
   db.settings.adminPath = normalizeRoutePath(db.settings.adminPath || process.env.ADMIN_PATH || '/admin');
+  db.settings.payments = normalizePaymentSettings(db.settings.payments || {});
+  db.customerNodes = db.customerNodes.map(({ amount, ...binding }) => binding);
   return db;
 }
 
-async function readJsonDbFile() {
-  await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
-  try {
-    const text = await fs.readFile(DATA_FILE, 'utf8');
-    return normalizeDb(JSON.parse(text.replace(/^\uFEFF/, '')));
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error;
-    return normalizeDb({});
-  }
+function normalizeBrandName(value) {
+  const text = String(value || '').trim().replace(/\s+/g, ' ');
+  return compactText(text || '十夜', 24);
 }
 
-async function writeJsonDbFile(db) {
-  const tmp = `${DATA_FILE}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(normalizeDb(db), null, 2), 'utf8');
-  await fs.rename(tmp, DATA_FILE);
+function normalizeLogoDataUrl(value) {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (!/^data:image\/(png|jpe?g|webp|gif|svg\+xml);base64,[a-z0-9+/=\s]+$/i.test(text)) return '';
+  return text.length <= 300000 ? text : '';
+}
+
+function publicBrandSettings(settings = {}) {
+  return {
+    brandName: normalizeBrandName(settings.brandName),
+    logoDataUrl: normalizeLogoDataUrl(settings.logoDataUrl || '')
+  };
 }
 
 async function initMysqlStorage() {
@@ -354,7 +579,6 @@ async function initMysqlStorage() {
   mysqlPool = mysql.createPool(poolOptions);
 
   await createMysqlSchema();
-  await migrateMysqlDataIfNeeded();
 }
 
 async function ensureMysqlDatabase(config) {
@@ -372,12 +596,6 @@ async function ensureMysqlDatabase(config) {
 }
 
 async function createMysqlSchema() {
-  await mysqlPool.query(`CREATE TABLE IF NOT EXISTS shiye_meta (
-    name VARCHAR(64) PRIMARY KEY,
-    value VARCHAR(255) NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-  ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-
   await mysqlPool.query(`CREATE TABLE IF NOT EXISTS shiye_settings (
     name VARCHAR(64) PRIMARY KEY,
     value LONGTEXT NOT NULL,
@@ -391,20 +609,11 @@ async function createMysqlSchema() {
     login_username VARCHAR(191) NOT NULL DEFAULT '',
     status VARCHAR(32) NOT NULL DEFAULT 'active',
     balance DECIMAL(14,2) NOT NULL DEFAULT 0,
-    amount DECIMAL(14,2) NOT NULL DEFAULT 0,
-    expire_at VARCHAR(40) NOT NULL DEFAULT '',
-    xui_server_id VARCHAR(64) NOT NULL DEFAULT '',
-    socks_node_id VARCHAR(64) NOT NULL DEFAULT '',
-    client_email VARCHAR(191) NOT NULL DEFAULT '',
     payload LONGTEXT NOT NULL,
     created_at VARCHAR(40) NOT NULL DEFAULT '',
     updated_at VARCHAR(40) NOT NULL DEFAULT '',
     INDEX idx_customer_login (login_username),
-    INDEX idx_customer_status (status),
-    INDEX idx_customer_xui (xui_server_id),
-    INDEX idx_customer_socks (socks_node_id),
-    INDEX idx_customer_expire (expire_at),
-    INDEX idx_customer_email (client_email)
+    INDEX idx_customer_status (status)
   ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
 
   await mysqlPool.query(`CREATE TABLE IF NOT EXISTS shiye_xui_servers (
@@ -420,6 +629,37 @@ async function createMysqlSchema() {
     updated_at VARCHAR(40) NOT NULL DEFAULT '',
     INDEX idx_xui_host (host),
     INDEX idx_xui_status (status)
+  ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+
+  await mysqlPool.query(`CREATE TABLE IF NOT EXISTS shiye_service_nodes (
+    id VARCHAR(64) PRIMARY KEY,
+    name VARCHAR(191) NOT NULL DEFAULT '',
+    xui_server_id VARCHAR(64) NOT NULL DEFAULT '',
+    inbound_id VARCHAR(64) NOT NULL DEFAULT '',
+    status VARCHAR(32) NOT NULL DEFAULT 'enabled',
+    amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+    payload LONGTEXT NOT NULL,
+    created_at VARCHAR(40) NOT NULL DEFAULT '',
+    updated_at VARCHAR(40) NOT NULL DEFAULT '',
+    INDEX idx_service_node_server (xui_server_id),
+    INDEX idx_service_node_status (status)
+  ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+
+  await mysqlPool.query(`CREATE TABLE IF NOT EXISTS shiye_customer_nodes (
+    id VARCHAR(64) PRIMARY KEY,
+    customer_id VARCHAR(64) NOT NULL DEFAULT '',
+    node_id VARCHAR(64) NOT NULL DEFAULT '',
+    client_email VARCHAR(191) NOT NULL DEFAULT '',
+    status VARCHAR(32) NOT NULL DEFAULT 'active',
+    expire_at VARCHAR(40) NOT NULL DEFAULT '',
+    payload LONGTEXT NOT NULL,
+    created_at VARCHAR(40) NOT NULL DEFAULT '',
+    updated_at VARCHAR(40) NOT NULL DEFAULT '',
+    INDEX idx_customer_node_customer (customer_id),
+    INDEX idx_customer_node_node (node_id),
+    INDEX idx_customer_node_email (client_email),
+    INDEX idx_customer_node_status (status),
+    INDEX idx_customer_node_expire (expire_at)
   ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
 
   await mysqlPool.query(`CREATE TABLE IF NOT EXISTS shiye_socks_nodes (
@@ -464,6 +704,25 @@ async function createMysqlSchema() {
     updated_at VARCHAR(40) NOT NULL DEFAULT '',
     INDEX idx_card_batch_name (name),
     INDEX idx_card_batch_created (created_at)
+  ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+
+  await mysqlPool.query(`CREATE TABLE IF NOT EXISTS shiye_recharge_orders (
+    id VARCHAR(64) PRIMARY KEY,
+    trade_no VARCHAR(64) NOT NULL,
+    customer_id VARCHAR(64) NOT NULL DEFAULT '',
+    provider VARCHAR(64) NOT NULL DEFAULT '',
+    method VARCHAR(64) NOT NULL DEFAULT '',
+    amount DECIMAL(14,2) NOT NULL DEFAULT 0,
+    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+    channel_trade_no VARCHAR(191) NOT NULL DEFAULT '',
+    payload LONGTEXT NOT NULL,
+    created_at VARCHAR(40) NOT NULL DEFAULT '',
+    paid_at VARCHAR(40) NOT NULL DEFAULT '',
+    updated_at VARCHAR(40) NOT NULL DEFAULT '',
+    UNIQUE KEY uniq_recharge_trade_no (trade_no),
+    INDEX idx_recharge_customer (customer_id),
+    INDEX idx_recharge_status (status),
+    INDEX idx_recharge_created (created_at)
   ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
 
   await mysqlPool.query(`CREATE TABLE IF NOT EXISTS shiye_balance_logs (
@@ -513,13 +772,6 @@ async function createMysqlSchema() {
     INDEX idx_log_status (status),
     INDEX idx_log_created (created_at)
   ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-
-  // Old storage table is kept only as a migration source for existing deployments.
-  await mysqlPool.query(`CREATE TABLE IF NOT EXISTS shiye_app_state (
-    name VARCHAR(64) PRIMARY KEY,
-    value LONGTEXT NOT NULL,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-  ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
 }
 
 function parseStoredJson(value, fallback) {
@@ -534,38 +786,16 @@ function compactText(value, max = 512) {
   return String(value || '').slice(0, max);
 }
 
-async function tableHasRows(table) {
-  const [rows] = await mysqlPool.query(`SELECT COUNT(*) AS count FROM ${table}`);
-  return Number(rows?.[0]?.count || 0) > 0;
-}
-
-async function readLegacyMysqlDb() {
-  const [rows] = await mysqlPool.query('SELECT value FROM shiye_app_state WHERE name = ?', ['db']);
-  if (!rows.length) return null;
-  return normalizeDb(parseStoredJson(rows[0].value, {}));
-}
-
-async function migrateMysqlDataIfNeeded() {
-  const [metaRows] = await mysqlPool.query('SELECT value FROM shiye_meta WHERE name = ?', ['schema_version']);
-  const hasCustomers = await tableHasRows('shiye_customers');
-  const hasSettings = await tableHasRows('shiye_settings');
-  if (metaRows.length && (hasCustomers || hasSettings)) return;
-
-  const legacyDb = await readLegacyMysqlDb();
-  const fileDb = await readJsonDbFile();
-  const importDb = legacyDb && Object.keys(legacyDb).length ? legacyDb : fileDb;
-  await writeMysqlDb(importDb);
-  await mysqlPool.query('INSERT INTO shiye_meta (name, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)', ['schema_version', '2']);
-  console.log('已初始化 MySQL 分表存储；如存在旧 MySQL 数据或 data/db.json，已自动迁移。');
-}
-
 async function readMysqlDb() {
   const [settingRows] = await mysqlPool.query('SELECT value FROM shiye_settings WHERE name = ?', ['app']);
   const [customerRows] = await mysqlPool.query('SELECT payload FROM shiye_customers ORDER BY created_at ASC, id ASC');
   const [serverRows] = await mysqlPool.query('SELECT payload FROM shiye_xui_servers ORDER BY created_at ASC, id ASC');
+  const [serviceNodeRows] = await mysqlPool.query('SELECT payload FROM shiye_service_nodes ORDER BY created_at ASC, id ASC');
+  const [customerNodeRows] = await mysqlPool.query('SELECT payload FROM shiye_customer_nodes ORDER BY created_at ASC, id ASC');
   const [socksRows] = await mysqlPool.query('SELECT payload FROM shiye_socks_nodes ORDER BY created_at ASC, id ASC');
   const [cardRows] = await mysqlPool.query('SELECT payload FROM shiye_cards ORDER BY created_at ASC, id ASC');
   const [batchRows] = await mysqlPool.query('SELECT payload FROM shiye_card_batches ORDER BY created_at ASC, id ASC');
+  const [rechargeRows] = await mysqlPool.query('SELECT payload FROM shiye_recharge_orders ORDER BY created_at ASC, id ASC LIMIT 2000');
   const [balanceRows] = await mysqlPool.query('SELECT payload FROM shiye_balance_logs ORDER BY created_at ASC, id ASC LIMIT 2000');
   const [renewalRows] = await mysqlPool.query('SELECT payload FROM shiye_renewal_logs ORDER BY created_at ASC, id ASC LIMIT 2000');
   const [logRows] = await mysqlPool.query('SELECT payload FROM shiye_sync_logs ORDER BY created_at ASC, id ASC LIMIT 1000');
@@ -573,182 +803,16 @@ async function readMysqlDb() {
     settings: parseStoredJson(settingRows?.[0]?.value, { currency: 'CNY', expiryWarningDays: 3 }),
     customers: customerRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
     xuiServers: serverRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
+    serviceNodes: serviceNodeRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
+    customerNodes: customerNodeRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
     socksNodes: socksRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
     cards: cardRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
     cardBatches: batchRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
+    rechargeOrders: rechargeRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
     balanceLogs: balanceRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
     renewalLogs: renewalRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id),
     syncLogs: logRows.map((row) => parseStoredJson(row.payload, {})).filter((item) => item.id)
   });
-}
-
-async function writeMysqlDb(db) {
-  const safeDb = normalizeDb(db);
-  const connection = await mysqlPool.getConnection();
-  try {
-    await connection.beginTransaction();
-
-    await connection.query(
-      'INSERT INTO shiye_settings (name, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)',
-      ['app', JSON.stringify(safeDb.settings || {})]
-    );
-
-    await connection.query('DELETE FROM shiye_customers');
-    for (const customer of safeDb.customers) {
-      await connection.query(`INSERT INTO shiye_customers (
-        id, name, contact, login_username, status, balance, amount, expire_at,
-        xui_server_id, socks_node_id, client_email, payload, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-        customer.id,
-        compactText(customer.name, 191),
-        compactText(customer.contact, 191),
-        compactText(customer.loginUsername, 191),
-        compactText(customer.status || 'active', 32),
-        Number(customer.balance || 0),
-        Number(customer.amount || 0),
-        compactText(customer.expireAt, 40),
-        compactText(customer.xuiServerId, 64),
-        compactText(customer.socksNodeId, 64),
-        compactText(customer.clientEmail, 191),
-        JSON.stringify(customer),
-        compactText(customer.createdAt, 40),
-        compactText(customer.updatedAt, 40)
-      ]);
-    }
-
-    await connection.query('DELETE FROM shiye_xui_servers');
-    for (const server of safeDb.xuiServers) {
-      await connection.query(`INSERT INTO shiye_xui_servers (
-        id, name, protocol, host, port, base_path, status, payload, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-        server.id,
-        compactText(server.name, 191),
-        compactText(server.protocol || 'http', 16),
-        compactText(server.host, 191),
-        Number(server.port || 0),
-        compactText(server.basePath || '/', 191),
-        compactText(server.status || 'enabled', 32),
-        JSON.stringify(server),
-        compactText(server.createdAt, 40),
-        compactText(server.updatedAt, 40)
-      ]);
-    }
-
-    await connection.query('DELETE FROM shiye_socks_nodes');
-    for (const node of safeDb.socksNodes) {
-      await connection.query(`INSERT INTO shiye_socks_nodes (
-        id, name, tag, address, port, status, payload, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-        node.id,
-        compactText(node.name, 191),
-        compactText(node.tag, 191),
-        compactText(node.address, 191),
-        Number(node.port || 0),
-        compactText(node.status || 'enabled', 32),
-        JSON.stringify(node),
-        compactText(node.createdAt, 40),
-        compactText(node.updatedAt, 40)
-      ]);
-    }
-
-    await connection.query('DELETE FROM shiye_cards');
-    for (const card of safeDb.cards) {
-      await connection.query(`INSERT INTO shiye_cards (
-        id, code, amount, type, status, used_by, payload, created_at, updated_at, used_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-        card.id,
-        compactText(normalizeCardCode(card.code), 191),
-        Number(card.amount || 0),
-        compactText(card.type || card.remark || '', 191),
-        compactText(card.status || 'unused', 32),
-        compactText(card.usedBy, 64),
-        JSON.stringify({ ...card, code: normalizeCardCode(card.code) }),
-        compactText(card.createdAt, 40),
-        compactText(card.updatedAt, 40),
-        compactText(card.usedAt, 40)
-      ]);
-    }
-
-    await connection.query('DELETE FROM shiye_card_batches');
-    for (const batch of safeDb.cardBatches) {
-      await connection.query(`INSERT INTO shiye_card_batches (
-        id, name, amount, prefix, remark, payload, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [
-        batch.id,
-        compactText(batch.name, 191),
-        Number(batch.amount || 0),
-        compactText(batch.prefix, 64),
-        compactText(batch.remark, 512),
-        JSON.stringify(batch),
-        compactText(batch.createdAt, 40),
-        compactText(batch.updatedAt, 40)
-      ]);
-    }
-
-    await connection.query('DELETE FROM shiye_balance_logs');
-    const balanceLogs = safeDb.balanceLogs.slice(-2000);
-    for (const log of balanceLogs) {
-      await connection.query(`INSERT INTO shiye_balance_logs (
-        id, customer_id, type, amount, before_balance, after_balance, operator, remark, payload, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-        log.id,
-        compactText(log.customerId, 64),
-        compactText(log.type, 64),
-        Number(log.amount || 0),
-        Number(log.beforeBalance || 0),
-        Number(log.afterBalance || 0),
-        compactText(log.operator, 191),
-        compactText(log.remark, 512),
-        JSON.stringify(log),
-        compactText(log.createdAt, 40)
-      ]);
-    }
-
-    await connection.query('DELETE FROM shiye_renewal_logs');
-    const renewalLogs = safeDb.renewalLogs.slice(-2000);
-    for (const log of renewalLogs) {
-      await connection.query(`INSERT INTO shiye_renewal_logs (
-        id, customer_id, months, price, before_expire_at, after_expire_at, source, status, message, payload, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, [
-        log.id,
-        compactText(log.customerId, 64),
-        Number(log.months || 1),
-        Number(log.price || 0),
-        compactText(log.beforeExpireAt, 40),
-        compactText(log.afterExpireAt, 40),
-        compactText(log.source, 64),
-        compactText(log.status, 32),
-        compactText(log.message, 512),
-        JSON.stringify(log),
-        compactText(log.createdAt, 40)
-      ]);
-    }
-
-    await connection.query('DELETE FROM shiye_sync_logs');
-    const logs = safeDb.syncLogs.slice(-1000);
-    for (const log of logs) {
-      await connection.query(`INSERT INTO shiye_sync_logs (
-        id, customer_id, type, status, message, detail, payload, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [
-        log.id,
-        compactText(log.customerId, 64),
-        compactText(log.type, 64),
-        compactText(log.status, 32),
-        compactText(log.message, 512),
-        JSON.stringify(log.detail || {}),
-        JSON.stringify(log),
-        compactText(log.createdAt, 40)
-      ]);
-    }
-
-    await connection.query('INSERT INTO shiye_meta (name, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)', ['schema_version', '2']);
-    await connection.commit();
-  } catch (error) {
-    await connection.rollback();
-    throw error;
-  } finally {
-    connection.release();
-  }
 }
 
 function rowObject(row) {
@@ -807,25 +871,17 @@ async function insertMysqlRenewalLog(connection, log) {
 
 async function updateMysqlCustomerRow(connection, customer) {
   await connection.query(`INSERT INTO shiye_customers (
-    id, name, contact, login_username, status, balance, amount, expire_at,
-    xui_server_id, socks_node_id, client_email, payload, created_at, updated_at
-  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    id, name, contact, login_username, status, balance, payload, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON DUPLICATE KEY UPDATE
     name = VALUES(name), contact = VALUES(contact), login_username = VALUES(login_username),
-    status = VALUES(status), balance = VALUES(balance), amount = VALUES(amount), expire_at = VALUES(expire_at),
-    xui_server_id = VALUES(xui_server_id), socks_node_id = VALUES(socks_node_id), client_email = VALUES(client_email),
-    payload = VALUES(payload), updated_at = VALUES(updated_at)`, [
+    status = VALUES(status), balance = VALUES(balance), payload = VALUES(payload), updated_at = VALUES(updated_at)`, [
     customer.id,
     compactText(customer.name, 191),
     compactText(customer.contact, 191),
     compactText(customer.loginUsername, 191),
     compactText(customer.status || 'active', 32),
     Number(customer.balance || 0),
-    Number(customer.amount || 0),
-    compactText(customer.expireAt, 40),
-    compactText(customer.xuiServerId, 64),
-    compactText(customer.socksNodeId, 64),
-    compactText(customer.clientEmail, 191),
     JSON.stringify(customer),
     compactText(customer.createdAt, 40),
     compactText(customer.updatedAt, 40)
@@ -871,6 +927,44 @@ async function upsertMysqlServerRow(connection, server) {
     JSON.stringify(server),
     compactText(server.createdAt, 40),
     compactText(server.updatedAt, 40)
+  ]);
+}
+
+async function upsertMysqlServiceNodeRow(connection, node) {
+  await connection.query(`INSERT INTO shiye_service_nodes (
+    id, name, xui_server_id, inbound_id, status, amount, payload, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON DUPLICATE KEY UPDATE
+    name = VALUES(name), xui_server_id = VALUES(xui_server_id), inbound_id = VALUES(inbound_id),
+    status = VALUES(status), amount = VALUES(amount), payload = VALUES(payload), updated_at = VALUES(updated_at)`, [
+    node.id,
+    compactText(node.name, 191),
+    compactText(node.xuiServerId, 64),
+    compactText(node.inboundId, 64),
+    compactText(node.status || 'enabled', 32),
+    Number(node.amount || 0),
+    JSON.stringify(node),
+    compactText(node.createdAt, 40),
+    compactText(node.updatedAt, 40)
+  ]);
+}
+
+async function upsertMysqlCustomerNodeRow(connection, binding) {
+  await connection.query(`INSERT INTO shiye_customer_nodes (
+    id, customer_id, node_id, client_email, status, expire_at, payload, created_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON DUPLICATE KEY UPDATE
+    customer_id = VALUES(customer_id), node_id = VALUES(node_id), client_email = VALUES(client_email),
+    status = VALUES(status), expire_at = VALUES(expire_at), payload = VALUES(payload), updated_at = VALUES(updated_at)`, [
+    binding.id,
+    compactText(binding.customerId, 64),
+    compactText(binding.nodeId, 64),
+    compactText(binding.clientEmail, 191),
+    compactText(binding.status || 'active', 32),
+    compactText(binding.expireAt, 40),
+    JSON.stringify(binding),
+    compactText(binding.createdAt, 40),
+    compactText(binding.updatedAt, 40)
   ]);
 }
 
@@ -972,6 +1066,561 @@ async function deleteMysqlRows(connection, table, ids) {
   await connection.query(`DELETE FROM ${table} WHERE id IN (?)`, [values]);
 }
 
+async function upsertMysqlRechargeOrderRow(connection, order) {
+  await connection.query(`INSERT INTO shiye_recharge_orders (
+    id, trade_no, customer_id, provider, method, amount, status, channel_trade_no, payload, created_at, paid_at, updated_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON DUPLICATE KEY UPDATE
+    customer_id = VALUES(customer_id), provider = VALUES(provider), method = VALUES(method), amount = VALUES(amount),
+    status = VALUES(status), channel_trade_no = VALUES(channel_trade_no), payload = VALUES(payload),
+    paid_at = VALUES(paid_at), updated_at = VALUES(updated_at)`, [
+    order.id,
+    compactText(order.tradeNo, 64),
+    compactText(order.customerId, 64),
+    compactText(order.provider, 64),
+    compactText(order.method, 64),
+    Number(order.amount || 0),
+    compactText(order.status || 'pending', 32),
+    compactText(order.channelTradeNo, 191),
+    JSON.stringify(order),
+    compactText(order.createdAt, 40),
+    compactText(order.paidAt, 40),
+    compactText(order.updatedAt, 40)
+  ]);
+}
+
+function siteOrigin(req) {
+  const proto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim() || (req.socket.encrypted ? 'https' : 'http');
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  return `${proto}://${host}`;
+}
+
+function clientIp(req) {
+  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+  const realIp = String(req.headers['x-real-ip'] || '').trim();
+  const remote = String(req.socket?.remoteAddress || '').trim();
+  const ip = forwarded || realIp || remote || '127.0.0.1';
+  if (ip === '::1') return '127.0.0.1';
+  return ip.replace(/^::ffff:/, '');
+}
+
+function isMobileRequest(req) {
+  return /android|iphone|ipad|ipod|mobile|micromessenger/i.test(String(req.headers['user-agent'] || ''));
+}
+
+function paymentBaseUrl(payments, fallbackOrigin) {
+  return String(payments.siteUrl || fallbackOrigin || '').replace(/\/+$/, '');
+}
+
+function paymentUrl(template, baseUrl, pathText, tradeNo) {
+  const fallback = `${baseUrl}${pathText}`;
+  const raw = String(template || fallback).trim() || fallback;
+  return raw
+    .replaceAll('{trade_no}', encodeURIComponent(tradeNo))
+    .replaceAll('{out_trade_no}', encodeURIComponent(tradeNo));
+}
+
+function epaySubmitUrl(gateway) {
+  const text = String(gateway || '').trim().replace(/\/+$/, '');
+  if (!text) return '';
+  if (/\/submit\.php$/i.test(text)) return text;
+  return `${text}/submit.php`;
+}
+
+function sortedSignContent(params, excludes = ['sign', 'sign_type']) {
+  return Object.keys(params)
+    .filter((key) => !excludes.includes(key) && params[key] !== undefined && params[key] !== null && params[key] !== '' && typeof params[key] !== 'object')
+    .sort()
+    .map((key) => `${key}=${params[key]}`)
+    .join('&');
+}
+
+function bepusdtSign(params, token) {
+  return crypto.createHash('md5').update(sortedSignContent(params, ['signature']) + token, 'utf8').digest('hex');
+}
+
+function timingSafeTextEqual(left, right) {
+  const a = Buffer.from(String(left || ''));
+  const b = Buffer.from(String(right || ''));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+function wxpayNonce() {
+  return crypto.randomBytes(16).toString('hex');
+}
+
+function wxpayTimestamp() {
+  return Math.floor(Date.now() / 1000).toString();
+}
+
+function wxpayCanonical(method, urlPath, timestamp, nonce, body = '') {
+  return `${method}\n${urlPath}\n${timestamp}\n${nonce}\n${body}\n`;
+}
+
+function wxpayAuthorization(config, method, urlPath, body = '') {
+  const privateKey = decrypt(config.merchantPrivateKeyEnc || config.privateKeyEnc);
+  if (!config.mchId || !config.merchantSerialNo || !privateKey) throw new Error('Wechat Pay mchId, merchant serial no or merchant private key is not configured');
+  const timestamp = wxpayTimestamp();
+  const nonce = wxpayNonce();
+  const signature = crypto.createSign('RSA-SHA256').update(wxpayCanonical(method, urlPath, timestamp, nonce, body), 'utf8').sign(normalizePemKey(privateKey, 'PRIVATE KEY'), 'base64');
+  return `WECHATPAY2-SHA256-RSA2048 mchid="${config.mchId}",nonce_str="${nonce}",signature="${signature}",timestamp="${timestamp}",serial_no="${config.merchantSerialNo}"`;
+}
+
+function verifyWechatNotifySignature(req, bodyText, config) {
+  const publicKey = decrypt(config.platformPublicKeyEnc);
+  if (!publicKey) return false;
+  const signature = String(req.headers['wechatpay-signature'] || '');
+  const timestamp = String(req.headers['wechatpay-timestamp'] || '');
+  const nonce = String(req.headers['wechatpay-nonce'] || '');
+  const serial = normalizeWechatSerialNo(req.headers['wechatpay-serial']);
+  if (!signature || !timestamp || !nonce) return false;
+  if (config.platformSerialNo && serial && serial !== config.platformSerialNo) return false;
+  return crypto.createVerify('RSA-SHA256').update(`${timestamp}\n${nonce}\n${bodyText}\n`, 'utf8').verify(normalizePemKey(publicKey, 'PUBLIC KEY'), signature, 'base64');
+}
+
+function decryptWechatResource(resource, apiV3Key) {
+  if (!apiV3Key || Buffer.byteLength(apiV3Key) !== 32) throw new Error('Wechat Pay APIv3 key must be 32 bytes');
+  const encrypted = Buffer.from(resource?.ciphertext || '', 'base64');
+  if (encrypted.length <= 16) throw new Error('Invalid Wechat Pay resource ciphertext');
+  const data = encrypted.subarray(0, encrypted.length - 16);
+  const tag = encrypted.subarray(encrypted.length - 16);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(apiV3Key, 'utf8'), Buffer.from(resource?.nonce || '', 'utf8'));
+  if (resource?.associated_data) decipher.setAAD(Buffer.from(resource.associated_data, 'utf8'));
+  decipher.setAuthTag(tag);
+  return JSON.parse(Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8'));
+}
+
+function epaySign(params, settings) {
+  const signType = String(settings.signType || 'MD5').toUpperCase();
+  const content = sortedSignContent(params);
+  if (signType === 'RSA') {
+    const privateKey = decrypt(settings.privateKeyEnc);
+    if (!privateKey) throw new Error('易支付 RSA 私钥未配置');
+    return crypto.createSign('RSA-SHA256').update(content, 'utf8').sign(normalizePemKey(privateKey, 'PRIVATE KEY'), 'base64');
+  }
+  const key = decrypt(settings.merchantKeyEnc);
+  if (!key) throw new Error('易支付商户密钥未配置');
+  return crypto.createHash('md5').update(content + key, 'utf8').digest('hex');
+}
+
+function verifyEpaySign(params, settings) {
+  const sign = String(params.sign || '');
+  const signType = String(params.sign_type || settings.signType || 'MD5').toUpperCase();
+  const content = sortedSignContent(params);
+  if (signType === 'RSA') {
+    const publicKey = decrypt(settings.publicKeyEnc);
+    if (!publicKey || !sign) return false;
+    return crypto.createVerify('RSA-SHA256').update(content, 'utf8').verify(normalizePemKey(publicKey, 'PUBLIC KEY'), sign, 'base64');
+  }
+  const key = decrypt(settings.merchantKeyEnc);
+  if (!key || !sign) return false;
+  const expected = crypto.createHash('md5').update(content + key, 'utf8').digest('hex');
+  return expected.length === sign.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sign));
+}
+
+function normalizePemKey(value, type = 'PRIVATE KEY') {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (text.includes('-----BEGIN')) return text;
+  const body = text.replace(/\s+/g, '').match(/.{1,64}/g)?.join('\n') || text;
+  return `-----BEGIN ${type}-----\n${body}\n-----END ${type}-----`;
+}
+
+function alipaySign(params, privateKey) {
+  const content = sortedSignContent(params, ['sign', 'sign_type']);
+  return crypto.createSign('RSA-SHA256').update(content, 'utf8').sign(normalizePemKey(privateKey, 'PRIVATE KEY'), 'base64');
+}
+
+function verifyAlipaySign(params, publicKey) {
+  const sign = String(params.sign || '');
+  if (!sign || !publicKey) return false;
+  const content = sortedSignContent(params, ['sign', 'sign_type']);
+  return crypto.createVerify('RSA-SHA256').update(content, 'utf8').verify(normalizePemKey(publicKey, 'PUBLIC KEY'), sign, 'base64');
+}
+
+function extractAlipayResponseContent(text, responseKey) {
+  const marker = `"${responseKey}"`;
+  const keyIndex = text.indexOf(marker);
+  if (keyIndex < 0) return '';
+  const colonIndex = text.indexOf(':', keyIndex + marker.length);
+  if (colonIndex < 0) return '';
+  let start = colonIndex + 1;
+  while (/\s/.test(text[start] || '')) start += 1;
+  if (text[start] !== '{') return '';
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') inString = true;
+    else if (char === '{') depth += 1;
+    else if (char === '}') {
+      depth -= 1;
+      if (depth === 0) return text.slice(start, index + 1);
+    }
+  }
+  return '';
+}
+
+function verifyAlipayApiResponse(responseText, responseKey, publicKey) {
+  if (!responseText || !publicKey) return false;
+  const payload = JSON.parse(responseText);
+  const sign = String(payload.sign || '');
+  const content = extractAlipayResponseContent(responseText, responseKey);
+  if (!sign || !content) return false;
+  return crypto.createVerify('RSA-SHA256').update(content, 'utf8').verify(normalizePemKey(publicKey, 'PUBLIC KEY'), sign, 'base64');
+}
+
+const ALIPAY_DIRECT_METHODS = Object.freeze({
+  page: {
+    id: 'page',
+    method: 'alipay.trade.page.pay',
+    productCode: 'FAST_INSTANT_TRADE_PAY',
+    label: '支付宝电脑网站支付'
+  },
+  wap: {
+    id: 'wap',
+    method: 'alipay.trade.wap.pay',
+    productCode: 'QUICK_WAP_WAY',
+    label: '支付宝手机网站/H5支付'
+  },
+  precreate: {
+    id: 'precreate',
+    method: 'alipay.trade.precreate',
+    productCode: 'FACE_TO_FACE_PAYMENT',
+    label: '支付宝当面付扫码'
+  }
+});
+
+function alipayBaseParams(config, apiMethod) {
+  return {
+    app_id: config.appId,
+    method: apiMethod,
+    format: 'JSON',
+    charset: 'utf-8',
+    sign_type: 'RSA2',
+    timestamp: new Date().toISOString().replace('T', ' ').slice(0, 19),
+    version: '1.0'
+  };
+}
+
+function alipayOrderBizContent(order, productCode) {
+  return {
+    out_trade_no: order.tradeNo,
+    total_amount: order.amount.toFixed(2),
+    subject: '账户余额充值',
+    product_code: productCode
+  };
+}
+
+function assertAlipayConfig(config) {
+  const privateKey = decrypt(config.appPrivateKeyEnc);
+  if (!config.appId || !privateKey) throw new Error('支付宝直连 App ID 或应用私钥未配置');
+  return privateKey;
+}
+
+function buildAlipayPayUrl(order, payments, origin, methodKey = 'page') {
+  const config = payments.alipay;
+  const baseUrl = paymentBaseUrl(payments, origin);
+  const privateKey = assertAlipayConfig(config);
+  const directMethod = ALIPAY_DIRECT_METHODS[methodKey] || ALIPAY_DIRECT_METHODS.page;
+  if (directMethod.id === 'precreate') throw new Error('当面付扫码需要调用预创建接口');
+  const bizContent = alipayOrderBizContent(order, directMethod.productCode);
+  if (directMethod.id === 'wap') bizContent.quit_url = paymentUrl(config.returnUrl, baseUrl, `/payment/result?trade_no=${encodeURIComponent(order.tradeNo)}`, order.tradeNo);
+  const params = {
+    ...alipayBaseParams(config, directMethod.method),
+    notify_url: paymentUrl(config.notifyUrl, baseUrl, '/api/payments/alipay/notify', order.tradeNo),
+    return_url: paymentUrl(config.returnUrl, baseUrl, `/payment/result?trade_no=${encodeURIComponent(order.tradeNo)}`, order.tradeNo),
+    biz_content: JSON.stringify(bizContent)
+  };
+  params.sign = alipaySign(params, privateKey);
+  return `${config.gateway}?${new URLSearchParams(params).toString()}`;
+}
+
+async function buildAlipayPrecreatePayment(order, payments, origin) {
+  const config = payments.alipay;
+  const baseUrl = paymentBaseUrl(payments, origin);
+  const privateKey = assertAlipayConfig(config);
+  const directMethod = ALIPAY_DIRECT_METHODS.precreate;
+  const params = {
+    ...alipayBaseParams(config, directMethod.method),
+    notify_url: paymentUrl(config.notifyUrl, baseUrl, '/api/payments/alipay/notify', order.tradeNo),
+    biz_content: JSON.stringify(alipayOrderBizContent(order, directMethod.productCode))
+  };
+  params.sign = alipaySign(params, privateKey);
+  const response = await fetch(config.gateway, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+    body: new URLSearchParams(params)
+  });
+  const responseText = await response.text();
+  const publicKey = decrypt(config.alipayPublicKeyEnc);
+  let payload = {};
+  try {
+    if (!verifyAlipayApiResponse(responseText, 'alipay_trade_precreate_response', publicKey)) {
+      throw new Error('支付宝当面付预创建响应验签失败');
+    }
+    payload = JSON.parse(responseText);
+  } catch (error) {
+    throw new Error(error.message || '支付宝当面付预创建响应无效');
+  }
+  const result = payload.alipay_trade_precreate_response || {};
+  if (!response.ok || result.code !== '10000' || !result.qr_code) {
+    const message = result.sub_msg || result.msg || `支付宝当面付预创建失败(${response.status})`;
+    throw new Error(message);
+  }
+  const qrImage = await QRCode.toDataURL(result.qr_code, { margin: 1, width: 280, errorCorrectionLevel: 'M' });
+  return { qrCode: result.qr_code, qrImage };
+}
+
+function buildEpayPayUrl(order, payments, origin) {
+  const config = payments.epay;
+  const baseUrl = paymentBaseUrl(payments, origin);
+  if (!config.gateway || !config.pid) throw new Error('易支付网关地址或 PID 未配置');
+  const params = {
+    pid: config.pid,
+    type: order.payType,
+    out_trade_no: order.tradeNo,
+    notify_url: paymentUrl(config.notifyUrl, baseUrl, '/api/payments/epay/notify', order.tradeNo),
+    return_url: paymentUrl(config.returnUrl, baseUrl, `/payment/result?trade_no=${encodeURIComponent(order.tradeNo)}`, order.tradeNo),
+    name: '账户余额充值',
+    money: order.amount.toFixed(2),
+    sign_type: config.signType || 'MD5'
+  };
+  params.sign = epaySign(params, config);
+  return `${epaySubmitUrl(config.gateway)}?${new URLSearchParams(params).toString()}`;
+}
+
+async function buildBepusdtNativePayment(order, payments, origin) {
+  const config = payments.bepusdt;
+  const baseUrl = paymentBaseUrl(payments, origin);
+  const token = decrypt(config.tokenEnc);
+  if (!config.appUrl || !token) throw new Error('BEpusdt appUrl or token is not configured');
+  const params = {
+    pid: '1000',
+    type: order.payType || config.tradeType || DEFAULT_BEPUSDT_TRADE_TYPE,
+    out_trade_no: order.tradeNo,
+    notify_url: paymentUrl(config.notifyUrl, baseUrl, '/api/payments/bepusdt/notify', order.tradeNo),
+    return_url: paymentUrl(config.returnUrl, baseUrl, `/payment/result?trade_no=${encodeURIComponent(order.tradeNo)}`, order.tradeNo),
+    name: 'Account balance recharge',
+    money: order.amount.toFixed(2),
+    sign_type: 'MD5'
+  };
+  params.sign = crypto.createHash('md5').update(sortedSignContent(params) + token, 'utf8').digest('hex');
+  return { payUrl: `${epaySubmitUrl(config.appUrl)}?${new URLSearchParams(params).toString()}` };
+}
+
+async function buildWechatNativePayment(order, payments, origin) {
+  const config = payments.wechat;
+  const baseUrl = paymentBaseUrl(payments, origin);
+  const urlPath = '/v3/pay/transactions/native';
+  if (!config.appId || !config.mchId) throw new Error('Wechat Pay appId or mchId is not configured');
+  const body = JSON.stringify({
+    appid: config.appId,
+    mchid: config.mchId,
+    description: config.description || 'Account balance recharge',
+    out_trade_no: order.tradeNo,
+    notify_url: paymentUrl(config.notifyUrl, baseUrl, '/api/payments/wechat/notify', order.tradeNo),
+    amount: { total: Math.round(Number(order.amount || 0) * 100), currency: 'CNY' }
+  });
+  const response = await fetch(`https://api.mch.weixin.qq.com${urlPath}`, {
+    method: 'POST',
+    headers: {
+      Authorization: wxpayAuthorization(config, 'POST', urlPath, body),
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.code_url) {
+    throw new Error(payload.message || payload.detail?.message || `Wechat Pay native order failed (${response.status})`);
+  }
+  const qrImage = await QRCode.toDataURL(payload.code_url, { margin: 1, width: 280, errorCorrectionLevel: 'M' });
+  return { qrCode: payload.code_url, qrImage };
+}
+
+async function buildWechatH5Payment(order, payments, origin, req) {
+  const config = payments.wechat;
+  const baseUrl = paymentBaseUrl(payments, origin);
+  const urlPath = '/v3/pay/transactions/h5';
+  if (!config.appId || !config.mchId) throw new Error('Wechat Pay appId or mchId is not configured');
+  const body = JSON.stringify({
+    appid: config.appId,
+    mchid: config.mchId,
+    description: config.description || 'Account balance recharge',
+    out_trade_no: order.tradeNo,
+    notify_url: paymentUrl(config.notifyUrl, baseUrl, '/api/payments/wechat/notify', order.tradeNo),
+    amount: { total: Math.round(Number(order.amount || 0) * 100), currency: 'CNY' },
+    scene_info: {
+      payer_client_ip: clientIp(req),
+      h5_info: {
+        type: 'Wap',
+        app_name: 'Account recharge',
+        wap_url: baseUrl || origin,
+        wap_name: 'Balance recharge'
+      }
+    }
+  });
+  const response = await fetch(`https://api.mch.weixin.qq.com${urlPath}`, {
+    method: 'POST',
+    headers: {
+      Authorization: wxpayAuthorization(config, 'POST', urlPath, body),
+      'Content-Type': 'application/json',
+      Accept: 'application/json'
+    },
+    body
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.h5_url) {
+    throw new Error(payload.message || payload.detail?.message || `Wechat Pay h5 order failed (${response.status})`);
+  }
+  return { payUrl: payload.h5_url };
+}
+
+function resolveRechargeMethod(methodId, payments, req) {
+  if (methodId === 'alipay') {
+    const enabled = payments.alipay.enabled && payments.alipay.methods || {};
+    const directMethod = isMobileRequest(req) && enabled.wap ? 'wap'
+      : enabled.page ? 'page'
+        : enabled.precreate ? 'precreate'
+          : enabled.wap ? 'wap'
+            : '';
+    if (payments.alipay.enabled && directMethod) return { provider: 'alipay_native', method: 'alipay', payType: 'alipay', alipayMethod: directMethod };
+    if (payments.epay.enabled && payments.epay.methods.alipay) return { provider: 'epay', method: 'alipay', payType: normalizeEpayPayType(payments.epay.types?.alipay, DEFAULT_EPAY_TYPES.alipay) };
+    return null;
+  }
+  if (methodId === 'wechat') {
+    const enabled = payments.wechat.enabled && payments.wechat.methods || {};
+    const wechatMethod = isMobileRequest(req) && enabled.h5 ? 'h5' : enabled.native ? 'native' : enabled.h5 ? 'h5' : '';
+    if (payments.wechat.enabled && wechatMethod) return { provider: 'wechat_native', method: 'wechat', payType: wechatMethod, wechatMethod };
+    if (payments.epay.enabled && payments.epay.methods.wxpay) return { provider: 'epay', method: 'wechat', payType: normalizeEpayPayType(payments.epay.types?.wxpay, DEFAULT_EPAY_TYPES.wxpay) };
+    return null;
+  }
+  if (methodId === 'paypal') {
+    if (!payments.epay.enabled || !payments.epay.methods.paypal) return null;
+    return { provider: 'epay', method: 'paypal', payType: normalizeEpayPayType(payments.epay.types?.paypal, DEFAULT_EPAY_TYPES.paypal) };
+  }
+  if (methodId === 'usdt') {
+    if (payments.bepusdt.enabled) return { provider: 'bepusdt_native', method: 'usdt', payType: payments.bepusdt.tradeType || DEFAULT_BEPUSDT_TRADE_TYPE };
+    if (payments.epay.enabled && payments.epay.methods.usdt) {
+      return { provider: 'epay', method: 'usdt', payType: normalizeEpayPayType(payments.epay.types?.usdt, DEFAULT_EPAY_TYPES.usdt) };
+    }
+    return null;
+  }
+  return null;
+}
+
+function publicRechargeResult(order = {}) {
+  return {
+    tradeNo: order.tradeNo || '',
+    provider: order.provider || '',
+    method: order.method || '',
+    amount: Number(order.amount || 0),
+    status: order.status || 'pending',
+    channelTradeNo: order.channelTradeNo || '',
+    createdAt: order.createdAt || '',
+    paidAt: order.paidAt || '',
+    updatedAt: order.updatedAt || ''
+  };
+}
+
+function publicBalanceLog(log = {}) {
+  return {
+    id: log.id || '',
+    type: log.type || '',
+    amount: Number(log.amount || 0),
+    beforeBalance: Number(log.beforeBalance || 0),
+    afterBalance: Number(log.afterBalance || 0),
+    remark: log.remark || '',
+    createdAt: log.createdAt || ''
+  };
+}
+
+function publicRenewalLog(log = {}) {
+  return {
+    id: log.id || '',
+    months: Math.max(1, Math.floor(Number(log.months || 1))),
+    price: Number(log.price || 0),
+    beforeExpireAt: log.beforeExpireAt || '',
+    afterExpireAt: log.afterExpireAt || '',
+    source: log.source || '',
+    status: log.status || '',
+    createdAt: log.createdAt || ''
+  };
+}
+
+function recentPendingOrders(db, customerId, windowMs = 2 * 60 * 60 * 1000) {
+  const since = Date.now() - windowMs;
+  return db.rechargeOrders.filter((order) => {
+    if (order.customerId !== customerId || order.status !== 'pending') return false;
+    const createdAt = new Date(order.createdAt || 0).getTime();
+    return Number.isFinite(createdAt) && createdAt >= since;
+  });
+}
+
+async function completeRechargeOrder(tradeNo, detail = {}) {
+  return mysqlTransaction(async (connection) => {
+    const [orderRows] = await connection.query('SELECT payload FROM shiye_recharge_orders WHERE trade_no = ? FOR UPDATE', [tradeNo]);
+    const order = rowObject(orderRows[0]);
+    if (!order.id) return { ok: false, message: '充值订单不存在' };
+    if (order.status === 'paid') return { ok: true, duplicate: true, order };
+    if (order.status && order.status !== 'pending') return { ok: false, message: '充值订单当前不可支付' };
+    if (detail.provider && order.provider !== detail.provider) return { ok: false, message: '支付平台不匹配' };
+    if (detail.payType && !sameEpayPayType(order.payType, detail.payType)) return { ok: false, message: '支付方式不匹配' };
+    if (detail.amount !== undefined && Number(detail.amount).toFixed(2) !== Number(order.amount || 0).toFixed(2)) return { ok: false, message: '支付金额不匹配' };
+
+    const [customerRows] = await connection.query('SELECT payload FROM shiye_customers WHERE id = ? FOR UPDATE', [order.customerId]);
+    const customer = rowObject(customerRows[0]);
+    if (!customer.id || customer.status === 'disabled') return { ok: false, message: '用户不存在或已停用' };
+
+    const beforeBalance = Number(customer.balance || 0);
+    const amount = Number(order.amount || 0);
+    customer.balance = Number((beforeBalance + amount).toFixed(2));
+    customer.updatedAt = nowIso();
+    order.status = 'paid';
+    order.channelTradeNo = String(detail.channelTradeNo || order.channelTradeNo || '');
+    order.rawNotify = detail.rawNotify || order.rawNotify || null;
+    order.paidAt = nowIso();
+    order.updatedAt = nowIso();
+
+    const balanceLog = {
+      id: id('bal'),
+      customerId: customer.id,
+      customerName: customer.name,
+      type: 'online_recharge',
+      amount,
+      beforeBalance,
+      afterBalance: customer.balance,
+      operator: '在线支付',
+      remark: `在线充值 ${order.tradeNo}`,
+      detail: { orderId: order.id, tradeNo: order.tradeNo, provider: order.provider, method: order.method, channelTradeNo: order.channelTradeNo },
+      createdAt: nowIso()
+    };
+    const syncLog = {
+      id: id('log'),
+      customerId: customer.id,
+      type: 'recharge',
+      status: 'success',
+      message: `在线充值到账 ${amount}`,
+      detail: { orderId: order.id, tradeNo: order.tradeNo, provider: order.provider, method: order.method },
+      createdAt: nowIso()
+    };
+
+    await updateMysqlCustomerRow(connection, customer);
+    await upsertMysqlRechargeOrderRow(connection, order);
+    await insertMysqlBalanceLog(connection, balanceLog);
+    await insertMysqlLog(connection, syncLog);
+    return { ok: true, order, customer };
+  });
+}
+
 async function redeemCardForUserMysql(customerId, rawCode) {
   const code = normalizeCardCode(rawCode);
   if (!code) {
@@ -1068,12 +1717,13 @@ async function redeemCardForUserMysql(customerId, rawCode) {
   return { db, customer: db.customers.find((item) => item.id === updatedCustomer.id) || updatedCustomer, amount };
 }
 
-async function renewCustomerForUserMysql(customerId, monthsInput) {
+async function renewCustomerNodeForUserMysql(customerId, customerNodeId, monthsInput) {
   const months = Math.max(1, Math.floor(Number(monthsInput || 1)));
+  const db = await readMysqlDb();
   const connection = await mysqlPool.getConnection();
   let updatedCustomer;
+  let updatedBinding;
   let detail;
-  let renewalLogId = '';
   try {
     await connection.beginTransaction();
     const [customerRows] = await connection.query('SELECT payload FROM shiye_customers WHERE id = ? FOR UPDATE', [customerId]);
@@ -1083,32 +1733,69 @@ async function renewCustomerForUserMysql(customerId, monthsInput) {
       error.statusCode = 404;
       throw error;
     }
-    if (!customer.xuiServerId) {
-      const error = new Error('当前账号还没有绑定节点，请联系管理员');
+    const [bindingRows] = await connection.query('SELECT payload FROM shiye_customer_nodes WHERE id = ? FOR UPDATE', [customerNodeId]);
+    const binding = rowObject(bindingRows[0]);
+    if (!binding.id || binding.customerId !== customer.id) {
+      const error = new Error('当前节点不存在或不属于该用户');
+      error.statusCode = 404;
+      throw error;
+    }
+    if (binding.status === 'disabled') {
+      const error = new Error('当前节点已停用，无法自助续费');
       error.statusCode = 400;
       throw error;
     }
-    const unitPrice = Math.max(0, Number(customer.amount || 0));
+    const [nodeRows] = await connection.query('SELECT payload FROM shiye_service_nodes WHERE id = ?', [binding.nodeId]);
+    const serviceNode = rowObject(nodeRows[0]);
+    if (!serviceNode.id || serviceNode.status === 'disabled') {
+      const error = new Error('当前节点暂不可续费，请联系管理员');
+      error.statusCode = 400;
+      throw error;
+    }
+    const unitPrice = Math.max(0, Number(serviceNode.amount || 0));
     if (unitPrice <= 0) {
       const error = new Error('管理员还没有设置当前节点续费价格');
       error.statusCode = 400;
       throw error;
     }
-    const price = unitPrice * months;
+    const price = Number((unitPrice * months).toFixed(2));
     if (Number(customer.balance || 0) < price) {
       const error = new Error(`余额不足，本次续费需要 ${price}`);
       error.statusCode = 400;
       throw error;
     }
-    const oldExpireAt = customer.expireAt;
+    const oldExpireAt = binding.expireAt;
     const beforeBalance = Number(customer.balance || 0);
-    customer.balance = beforeBalance - price;
-    customer.expireAt = addMonths(customer.expireAt, months);
-    customer.status = 'active';
+    const newExpireAt = addMonths(binding.expireAt, months);
+    const syncDb = {
+      ...db,
+      customers: db.customers.map((item) => item.id === customer.id ? customer : item),
+      serviceNodes: db.serviceNodes.map((item) => item.id === serviceNode.id ? serviceNode : item),
+      customerNodes: db.customerNodes.map((item) => item.id === binding.id ? { ...binding, expireAt: newExpireAt, status: 'active' } : item)
+    };
+    const target = customerSyncTarget(syncDb, customer, { ...binding, expireAt: newExpireAt, status: 'active' });
+    detail = { nodeId: binding.id, serviceNodeId: serviceNode.id, nodeName: binding.name || serviceNode.name || '', months, unitPrice, price, oldExpireAt, newExpireAt, warnings: [] };
+
+    try {
+      detail.socksResult = await syncSocksToXui(syncDb, target);
+      detail.clientResult = await syncClientToXui(syncDb, target, 'upsert');
+      detail.serviceNodeResult = await persistCreatedInboundToServiceNode(syncDb, target.serviceNodeId, detail.clientResult.createdInbound, connection);
+    } catch (error) {
+      const syncError = new Error('续费失败，请稍后重试或联系管理员');
+      syncError.statusCode = 502;
+      throw syncError;
+    }
+
+    customer.balance = Number((beforeBalance - price).toFixed(2));
     customer.updatedAt = nowIso();
-    detail = { months, unitPrice, price, oldExpireAt, newExpireAt: customer.expireAt, warnings: [] };
+    binding.expireAt = newExpireAt;
+    binding.status = 'active';
+    binding.updatedAt = nowIso();
     updatedCustomer = customer;
+    updatedBinding = binding;
+
     await updateMysqlCustomerRow(connection, customer);
+    await upsertMysqlCustomerNodeRow(connection, binding);
     await insertMysqlBalanceLog(connection, {
       id: id('bal'),
       customerId: customer.id,
@@ -1118,22 +1805,30 @@ async function renewCustomerForUserMysql(customerId, monthsInput) {
       beforeBalance,
       afterBalance: customer.balance,
       operator: '用户自助',
-      remark: `自助续费 ${months} 个月`,
+      remark: `自助续费 ${binding.name || serviceNode.name || '当前节点'} ${months} 个月`,
       detail,
       createdAt: nowIso()
     });
-    renewalLogId = id('ren');
     await insertMysqlRenewalLog(connection, {
-      id: renewalLogId,
+      id: id('ren'),
       customerId: customer.id,
       customerName: customer.name,
       months,
       price,
       beforeExpireAt: oldExpireAt,
-      afterExpireAt: customer.expireAt,
+      afterExpireAt: binding.expireAt,
       source: 'user',
-      status: 'pending_sync',
-      message: `用户自助续费 ${months} 个月`,
+      status: 'success',
+      message: `用户自助续费 ${binding.name || serviceNode.name || '当前节点'} ${months} 个月`,
+      detail,
+      createdAt: nowIso()
+    });
+    await insertMysqlLog(connection, {
+      id: id('log'),
+      customerId: customer.id,
+      type: 'renew',
+      status: 'success',
+      message: `用户自助续费 ${binding.name || serviceNode.name || '当前节点'} ${months} 个月`,
       detail,
       createdAt: nowIso()
     });
@@ -1145,25 +1840,11 @@ async function renewCustomerForUserMysql(customerId, monthsInput) {
     connection.release();
   }
 
-  const db = await readMysqlDb();
-  const customer = db.customers.find((item) => item.id === updatedCustomer.id) || updatedCustomer;
-  try {
-    detail.clientResult = await syncClientToXui(db, customer, 'upsert');
-    detail.socksResult = await syncSocksToXui(db, customer);
-  } catch (error) {
-    detail.warnings.push(`续费已扣款，本地已生效，但同步 3-xui 失败：${error.message}`);
-  }
-  addLog(db, customer.id, 'renew', detail.warnings.length ? 'warning' : 'success', `用户自助续费 ${months} 个月`, detail);
-  const renewalLog = db.renewalLogs.find((log) => log.id === renewalLogId);
-  if (renewalLog) {
-    renewalLog.status = detail.warnings.length ? 'warning' : 'success';
-    renewalLog.detail = detail;
-  }
-  await writeMysqlDb(db);
   const freshDb = await readMysqlDb();
   return {
     db: freshDb,
-    customer: freshDb.customers.find((item) => item.id === customer.id) || customer,
+    customer: freshDb.customers.find((item) => item.id === updatedCustomer.id) || updatedCustomer,
+    customerNode: freshDb.customerNodes.find((item) => item.id === updatedBinding.id) || updatedBinding,
     detail
   };
 }
@@ -1171,43 +1852,29 @@ async function renewCustomerForUserMysql(customerId, monthsInput) {
 async function initStorage() {
   if (!isInstalled()) {
     setupRequired = true;
-    const db = await readJsonDbFile();
-    applyRuntimeSettings(db);
+    applyRuntimeSettings(normalizeDb({}));
     return;
   }
-  if (isMysqlStorage()) {
-    try {
-      await initMysqlStorage();
-      applyRuntimeSettings(await readMysqlDb());
-      setupRequired = false;
-    } catch (error) {
-      if (hasConfiguredMysql()) throw error;
-      setupRequired = true;
-      const db = await readJsonDbFile();
-      applyRuntimeSettings(db);
-    }
-    return;
+  try {
+    await initMysqlStorage();
+    applyRuntimeSettings(await readMysqlDb());
+    setupRequired = false;
+  } catch (error) {
+    if (hasConfiguredMysql()) throw error;
+    setupRequired = true;
+    applyRuntimeSettings(normalizeDb({}));
   }
-  const db = await readJsonDbFile();
-  applyRuntimeSettings(db);
-  setupRequired = false;
 }
 
 async function readDb() {
-  const db = isMysqlStorage() ? await readMysqlDb() : await readJsonDbFile();
+  const db = await readMysqlDb();
   applyRuntimeSettings(db);
   return db;
 }
 
-async function writeDb(db) {
-  const safeDb = normalizeDb(db);
-  if (!isMysqlStorage()) return writeJsonDbFile(safeDb);
-  await writeMysqlDb(safeDb);
-}
-
 async function withWriteLock(task) {
   const run = async () => {
-    if (!isMysqlStorage()) return task();
+    if (setupRequired) return task();
     const connection = await mysqlPool.getConnection();
     try {
       const [rows] = await connection.query('SELECT GET_LOCK(?, 15) AS locked', ['shiye_management_write']);
@@ -1224,6 +1891,7 @@ async function withWriteLock(task) {
 }
 
 function shouldUseWriteLock(req, pathname) {
+  if (['/api/payments/epay/notify', '/api/payments/alipay/notify', '/api/payments/bepusdt/notify', '/api/payments/wechat/notify'].includes(pathname)) return true;
   if (!['POST', 'PUT', 'DELETE'].includes(req.method)) return false;
   if (['/api/login', '/api/logout', '/api/test-xui'].includes(pathname)) return false;
   if (pathname === '/api/setup/install') return false;
@@ -1231,30 +1899,233 @@ function shouldUseWriteLock(req, pathname) {
 }
 
 function publicCustomer(customer) {
-  const { loginPasswordHash, ...safeCustomer } = customer;
+  const {
+    loginPasswordHash,
+    selectedPackageId,
+    packageName,
+    amount,
+    expireAt,
+    trafficLimitGb,
+    xuiServerId,
+    inboundId,
+    autoCreateInbound,
+    inboundPort,
+    inboundRemark,
+    inboundTemplate,
+    inboundSni,
+    inboundHost,
+    inboundPath,
+    inboundGrpcServiceName,
+    inboundCertFile,
+    inboundKeyFile,
+    clientId,
+    clientEmail,
+    clientUuid,
+    protocol,
+    useSocks,
+    socksNodeId,
+    ...safeCustomer
+  } = customer;
   return { ...safeCustomer, computedStatus: customerStatus(customer) };
 }
 
-function publicNodeName(customer) {
-  const raw = String(customer?.packageName || customer?.inboundRemark || customer?.name || '').trim();
-  const sanitized = raw
-    .replace(/3\s*-?\s*x?\s*-?\s*ui/gi, '')
-    .replace(/x\s*-?\s*ui/gi, '')
-    .replace(/导入/gi, '')
-    .trim();
-  return sanitized || '当前节点';
+function serviceNodeStatus(node) {
+  return node?.status === 'disabled' ? 'disabled' : 'enabled';
+}
+
+function customerNodeStatus(customer, binding, node) {
+  if (customer?.status === 'disabled' || binding?.status === 'disabled' || node?.status === 'disabled') return 'disabled';
+  return expiryStatus(binding?.expireAt || '', binding?.status || 'active');
+}
+
+function customerSyncTarget(db, customer, binding) {
+  const node = db.serviceNodes.find((item) => item.id === binding?.nodeId);
+  if (!node) {
+    const error = new Error('绑定节点不存在');
+    error.statusCode = 404;
+    throw error;
+  }
+  return {
+    ...customer,
+    packageName: node.name || binding.name || '当前节点',
+    amount: Number(node.amount || 0),
+    expireAt: binding.expireAt || '',
+    trafficLimitGb: Number(binding.trafficLimitGb || node.trafficLimitGb || 0),
+    status: customer.status === 'disabled' || binding.status === 'disabled' || node.status === 'disabled' ? 'disabled' : 'active',
+    xuiServerId: node.xuiServerId,
+    inboundId: node.inboundId,
+    autoCreateInbound: node.autoCreateInbound,
+    inboundPort: node.inboundPort,
+    inboundRemark: node.inboundRemark || node.name,
+    inboundTemplate: node.inboundTemplate,
+    inboundSni: node.inboundSni,
+    inboundHost: node.inboundHost,
+    inboundPath: node.inboundPath,
+    inboundGrpcServiceName: node.inboundGrpcServiceName,
+    inboundCertFile: node.inboundCertFile,
+    inboundKeyFile: node.inboundKeyFile,
+    useSocks: node.useSocks,
+    socksNodeId: node.socksNodeId,
+    clientId: binding.clientId || binding.clientEmail,
+    clientEmail: binding.clientEmail,
+    clientUuid: binding.clientUuid,
+    customerNodeId: binding.id,
+    serviceNodeId: node.id
+  };
+}
+
+function customerNodeDisplayName(db, binding) {
+  const node = db.serviceNodes.find((item) => item.id === binding?.nodeId);
+  const name = String(node?.name || binding?.name || '当前节点').trim() || '当前节点';
+  return /3\s*[-]?\s*x\s*[-]?\s*ui|x\s*[-]?\s*ui/i.test(name) ? '当前节点' : name;
+}
+
+function customerNodesFor(db, customerId) {
+  return db.customerNodes.filter((item) => item.customerId === customerId);
+}
+
+function findCustomerNodeForUser(db, customerId, bindingId) {
+  const nodes = customerNodesFor(db, customerId);
+  if (!nodes.length) return null;
+  const idText = String(bindingId || '').trim();
+  return idText ? nodes.find((item) => item.id === idText) || null : nodes[0];
+}
+
+function publicCustomerNode(db, customer, binding) {
+  const node = db.serviceNodes.find((item) => item.id === binding.nodeId) || {};
+  const status = customerNodeStatus(customer, binding, node);
+  return {
+    id: binding.id,
+    name: customerNodeDisplayName(db, binding),
+    renewPrice: Number(node.amount || 0),
+    trafficLimitGb: Number(binding.trafficLimitGb || node.trafficLimitGb || 0),
+    expireAt: binding.expireAt || '',
+    status,
+    hasLink: status === 'active' && Boolean(node.xuiServerId && binding.clientEmail),
+    remark: binding.remark || ''
+  };
+}
+
+function assertCustomerNodeUsable(db, customer, binding) {
+  const node = db.serviceNodes.find((item) => item.id === binding?.nodeId);
+  if (!binding || !node) {
+    const error = new Error('node-unavailable');
+    error.statusCode = 404;
+    throw error;
+  }
+  if (customerNodeStatus(customer, binding, node) !== 'active') {
+    const error = new Error('node-disabled-or-expired');
+    error.statusCode = 403;
+    throw error;
+  }
+  return node;
+}
+
+async function persistCreatedInboundToServiceNode(db, serviceNodeId, createdInbound, connection = null) {
+  const inboundId = Number(createdInbound?.inboundId);
+  if (!serviceNodeId || !Number.isInteger(inboundId) || inboundId <= 0) return { skipped: true };
+  const index = db.serviceNodes.findIndex((item) => item.id === serviceNodeId);
+  if (index < 0) return { skipped: true, reason: 'service-node-not-found', inboundId };
+
+  const node = { ...db.serviceNodes[index] };
+  node.inboundId = String(inboundId);
+  node.autoCreateInbound = false;
+  if (createdInbound.port) node.inboundPort = String(createdInbound.port);
+  if (createdInbound.remark) node.inboundRemark = String(createdInbound.remark);
+  if (createdInbound.template) node.inboundTemplate = String(createdInbound.template);
+  node.updatedAt = nowIso();
+  db.serviceNodes[index] = node;
+
+  if (connection) {
+    await upsertMysqlServiceNodeRow(connection, node);
+  } else {
+    await mysqlTransaction((conn) => upsertMysqlServiceNodeRow(conn, node));
+  }
+
+  return {
+    updated: true,
+    serviceNodeId,
+    inboundId: node.inboundId,
+    inboundPort: node.inboundPort || '',
+    autoCreateInbound: node.autoCreateInbound
+  };
+}
+
+async function clearRemovedInboundFromServiceNode(db, serviceNodeId, inboundResult, connection = null) {
+  if (!serviceNodeId || !(inboundResult?.deleted || inboundResult?.missing)) return { skipped: true };
+  const index = db.serviceNodes.findIndex((item) => item.id === serviceNodeId);
+  if (index < 0) return { skipped: true, reason: 'service-node-not-found' };
+
+  const node = { ...db.serviceNodes[index] };
+  if (!node.inboundId && node.autoCreateInbound) return { skipped: true, reason: 'already-clear' };
+  node.inboundId = '';
+  node.inboundPort = '';
+  node.autoCreateInbound = true;
+  node.updatedAt = nowIso();
+  db.serviceNodes[index] = node;
+
+  if (connection) {
+    await upsertMysqlServiceNodeRow(connection, node);
+  } else {
+    await mysqlTransaction((conn) => upsertMysqlServiceNodeRow(conn, node));
+  }
+
+  return { updated: true, serviceNodeId, autoCreateInbound: node.autoCreateInbound };
+}
+
+async function syncCustomerNodeToRemote(db, customer, binding, action = 'upsert', options = {}) {
+  const target = customerSyncTarget(db, customer, binding);
+  const socksResult = await syncSocksToXui(db, target);
+  const clientResult = await syncClientToXui(db, target, action);
+  const serviceNodeResult = await persistCreatedInboundToServiceNode(db, target.serviceNodeId, clientResult.createdInbound, options.connection);
+  return { target, socksResult, clientResult, serviceNodeResult };
+}
+
+async function syncAllCustomerNodes(db, customer, action = 'upsert') {
+  const bindings = customerNodesFor(db, customer.id);
+  const results = [];
+  for (const binding of bindings) {
+    results.push(await syncCustomerNodeToRemote(db, customer, binding, action));
+  }
+  return results;
+}
+
+function validateServiceNode(node) {
+  if (!node.name) throw new Error('请填写服务节点名称');
+  if (!node.xuiServerId) throw new Error('请选择所属面板节点');
+  if (!node.inboundId && !node.autoCreateInbound) throw new Error('请填写入站 ID，或启用自动创建入站');
+  if (node.inboundId) {
+    const inboundId = Number(node.inboundId);
+    if (!Number.isInteger(inboundId) || inboundId <= 0) throw new Error('入站 ID 必须是正整数');
+  }
+  if (node.inboundPort) {
+    const port = Number(node.inboundPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('新入站端口必须是 1-65535 之间的数字');
+  }
+  if (node.autoCreateInbound && node.inboundTemplate === 'vless-tls' && (!node.inboundCertFile || !node.inboundKeyFile)) throw new Error('TLS 模板需要填写证书文件路径和私钥文件路径');
+}
+
+function validateCustomerNodeBinding(db, binding) {
+  if (!binding.customerId) throw new Error('请选择用户');
+  if (!binding.nodeId) throw new Error('请选择服务节点');
+  if (!db.customers.some((item) => item.id === binding.customerId)) throw new Error('用户不存在');
+  if (!db.serviceNodes.some((item) => item.id === binding.nodeId)) throw new Error('服务节点不存在');
+  if (!binding.clientEmail) throw new Error('客户端邮箱不能为空');
+  if (!binding.clientUuid) throw new Error('UUID 不能为空');
 }
 
 function publicDb(db) {
   return {
     settings: {
+      ...publicBrandSettings(db.settings),
       currency: db.settings?.currency || 'CNY',
       expiryWarningDays: Number(db.settings?.expiryWarningDays ?? 3),
       purchaseCardUrl: db.settings?.purchaseCardUrl || '',
       adminPath: normalizeRoutePath(db.settings?.adminPath || adminPath()),
       adminUsername: adminUsername(db),
       passwordManaged: Boolean(db.settings?.admin?.passwordHash),
-      defaultPasswordWarning: usingDefaultAdmin(db)
+      defaultPasswordWarning: usingDefaultAdmin(db),
+      payments: publicPaymentSettings(db.settings?.payments)
     },
     customers: db.customers.map(publicCustomer),
     xuiServers: db.xuiServers.map(({ passwordEnc, apiTokenEnc, ...server }) => ({
@@ -1263,47 +2134,93 @@ function publicDb(db) {
       password: maskSecret(passwordEnc),
       apiToken: maskSecret(apiTokenEnc)
     })),
+    serviceNodes: db.serviceNodes.map((node) => ({
+      ...node,
+      computedStatus: serviceNodeStatus(node)
+    })),
+    customerNodes: db.customerNodes.map(({ amount, ...binding }) => ({ ...binding })),
     socksNodes: db.socksNodes.map(({ passwordEnc, ...node }) => ({
       ...node,
       password: maskSecret(passwordEnc)
     })),
     cards: db.cards.map((card) => ({ ...card })),
     cardBatches: db.cardBatches.map((batch) => ({ ...batch })),
+    rechargeOrders: db.rechargeOrders.slice(-500).reverse(),
     balanceLogs: db.balanceLogs.slice(-500).reverse(),
     renewalLogs: db.renewalLogs.slice(-500).reverse(),
     syncLogs: db.syncLogs.slice(-250).reverse()
   };
 }
 
+function userNodeDisplayName(customer) {
+  const name = String(customer?.packageName || customer?.inboundRemark || customer?.name || '当前节点').trim() || '当前节点';
+  return /3\s*[-]?\s*x\s*[-]?\s*ui|x\s*[-]?\s*ui/i.test(name) ? '当前节点' : name;
+}
+
+function extractXuiLinks(data) {
+  const values = [];
+  const visit = (value) => {
+    const parsed = typeof value === 'string' ? parseMaybeJson(value) : value;
+    if (parsed && parsed !== value) return visit(parsed);
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (value && typeof value === 'object') {
+      for (const key of ['link', 'url', 'uri', 'shareLink', 'share_link', 'subscription', 'sub']) {
+        if (typeof value[key] === 'string') visit(value[key]);
+      }
+      for (const key of ['links', 'urls', 'items', 'list', 'obj', 'data', 'result']) {
+        if (value[key] !== undefined) visit(value[key]);
+      }
+      return;
+    }
+    const text = String(value || '').trim();
+    if (/^(vless|vmess|trojan|ss|hysteria|hy2):\/\//i.test(text)) values.push(text);
+  };
+  visit(data);
+  return [...new Set(values)];
+}
+
+async function getXuiClientLinks(db, customer) {
+  if (!customer?.xuiServerId || !customer?.clientEmail) return [];
+  const server = db.xuiServers.find((item) => item.id === customer.xuiServerId);
+  if (!server) return [];
+  const email = encodeURIComponent(customer.clientEmail);
+  const result = await xuiRequest(server, withApiPrefix(server, `/panel/api/clients/links/${email}`), { method: 'GET' });
+  return extractXuiLinks(result.data);
+}
+
 function publicUserDb(db, customer) {
+  const nodes = customerNodesFor(db, customer.id).map((binding) => publicCustomerNode(db, customer, binding));
+  const earliestNode = nodes
+    .filter((node) => node.expireAt)
+    .sort((a, b) => new Date(a.expireAt).getTime() - new Date(b.expireAt).getTime())[0];
   const safeCustomer = {
     id: customer.id,
     name: customer.name,
     contact: customer.contact || '',
     loginUsername: customer.loginUsername || '',
     balance: Number(customer.balance || 0),
-    amount: Number(customer.amount || 0),
-    expireAt: customer.expireAt || '',
-    trafficLimitGb: Number(customer.trafficLimitGb || 0),
+    amount: Number(nodes[0]?.renewPrice || 0),
+    expireAt: earliestNode?.expireAt || '',
+    trafficLimitGb: Number(nodes.reduce((sum, node) => sum + Number(node.trafficLimitGb || 0), 0)),
     status: customer.status || 'active',
     computedStatus: customerStatus(customer)
   };
   return {
     settings: {
+      ...publicBrandSettings(db.settings),
       currency: db.settings?.currency || 'CNY',
-      purchaseCardUrl: db.settings?.purchaseCardUrl || ''
+      purchaseCardUrl: db.settings?.purchaseCardUrl || '',
+      payments: publicUserPaymentSettings(db.settings?.payments)
     },
     customer: safeCustomer,
-    node: customer.xuiServerId ? {
-      name: publicNodeName(customer),
-      renewPrice: Number(customer.amount || 0),
-      trafficLimitGb: Number(customer.trafficLimitGb || 0),
-      expireAt: customer.expireAt || '',
-      status: customerStatus(customer),
-      subscriptionReady: Boolean(customer.clientId || customer.clientEmail)
-    } : null,
-    balanceLogs: db.balanceLogs.filter((log) => log.customerId === customer.id).slice(-50).reverse(),
-    renewalLogs: db.renewalLogs.filter((log) => log.customerId === customer.id).slice(-50).reverse()
+    nodes,
+    node: nodes[0] || null,
+    rechargeOrders: db.rechargeOrders.filter((order) => order.customerId === customer.id).slice(-20).reverse().map(publicRechargeResult),
+    balanceLogs: db.balanceLogs.filter((log) => log.customerId === customer.id).slice(-50).reverse().map(publicBalanceLog),
+    renewalLogs: db.renewalLogs.filter((log) => log.customerId === customer.id).slice(-50).reverse().map(publicRenewalLog)
   };
 }
 
@@ -1329,12 +2246,36 @@ async function parseJson(req) {
   }
 }
 
+async function parseRequestBody(req) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_JSON_BODY_BYTES) {
+      const error = new Error('Request body too large');
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  if (!chunks.length) return {};
+  const text = Buffer.concat(chunks).toString('utf8');
+  const contentType = String(req.headers['content-type'] || '').toLowerCase();
+  if (contentType.includes('application/x-www-form-urlencoded')) {
+    return Object.fromEntries(new URLSearchParams(text));
+  }
+  if (contentType.includes('application/json')) {
+    try { return JSON.parse(text); } catch { return {}; }
+  }
+  return Object.fromEntries(new URLSearchParams(text));
+}
+
 function securityHeaders(extra = {}) {
   return {
     'X-Content-Type-Options': 'nosniff',
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
-    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+    'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
     ...extra
   };
 }
@@ -1342,6 +2283,11 @@ function securityHeaders(extra = {}) {
 function send(res, status, data) {
   res.writeHead(status, securityHeaders({ 'Content-Type': 'application/json; charset=utf-8' }));
   res.end(JSON.stringify(data));
+}
+
+function sendText(res, status, text) {
+  res.writeHead(status, securityHeaders({ 'Content-Type': 'text/plain; charset=utf-8' }));
+  res.end(text);
 }
 
 function sendError(res, status, message, detail) {
@@ -1393,11 +2339,6 @@ function requireUser(session, res) {
   if (session.role === 'user' && session.customerId) return true;
   sendError(res, 403, '需要用户账号登录');
   return false;
-}
-
-function clientIp(req) {
-  const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
-  return forwarded || req.socket.remoteAddress || 'unknown';
 }
 
 function tooManyLoginAttempts(req) {
@@ -1570,6 +2511,57 @@ function normalizeCardBatch(input = {}, existing = {}) {
   };
 }
 
+function normalizeServiceNode(input, existing = {}) {
+  return {
+    ...existing,
+    id: input.id || existing.id || id('node'),
+    name: textValue(input, existing, 'name', '当前节点') || '当前节点',
+    xuiServerId: textValue(input, existing, 'xuiServerId'),
+    inboundId: textValue(input, existing, 'inboundId'),
+    autoCreateInbound: Boolean(hasField(input, 'autoCreateInbound') ? input.autoCreateInbound : existing.autoCreateInbound ?? false),
+    inboundPort: textValue(input, existing, 'inboundPort'),
+    inboundRemark: textValue(input, existing, 'inboundRemark'),
+    inboundTemplate: INBOUND_TEMPLATES.has(textValue(input, existing, 'inboundTemplate', 'vless-tcp')) ? textValue(input, existing, 'inboundTemplate', 'vless-tcp') : 'vless-tcp',
+    inboundSni: textValue(input, existing, 'inboundSni'),
+    inboundHost: textValue(input, existing, 'inboundHost'),
+    inboundPath: textValue(input, existing, 'inboundPath'),
+    inboundGrpcServiceName: textValue(input, existing, 'inboundGrpcServiceName'),
+    inboundCertFile: textValue(input, existing, 'inboundCertFile'),
+    inboundKeyFile: textValue(input, existing, 'inboundKeyFile'),
+    amount: numberValue(input, existing, 'amount', 0),
+    trafficLimitGb: numberValue(input, existing, 'trafficLimitGb', 100),
+    useSocks: Boolean(hasField(input, 'useSocks') ? input.useSocks : existing.useSocks ?? false),
+    socksNodeId: textValue(input, existing, 'socksNodeId'),
+    status: textValue(input, existing, 'status', 'enabled') === 'disabled' ? 'disabled' : 'enabled',
+    remark: textValue(input, existing, 'remark'),
+    updatedAt: nowIso(),
+    createdAt: existing.createdAt || input.createdAt || nowIso()
+  };
+}
+
+function normalizeCustomerNode(input, existing = {}) {
+  const clientEmail = String(hasField(input, 'clientEmail') ? input.clientEmail : existing.clientEmail || '').trim()
+    || `cust_${crypto.randomBytes(4).toString('hex')}`;
+  const clientUuid = String(hasField(input, 'clientUuid') ? input.clientUuid : existing.clientUuid || '').trim()
+    || crypto.randomUUID();
+  return {
+    ...existing,
+    id: input.id || existing.id || id('cnode'),
+    customerId: textValue(input, existing, 'customerId'),
+    nodeId: textValue(input, existing, 'nodeId'),
+    name: textValue(input, existing, 'name'),
+    clientId: textValue(input, existing, 'clientId') || clientEmail,
+    clientEmail,
+    clientUuid,
+    expireAt: textValue(input, existing, 'expireAt') || addMonths(null, 1),
+    trafficLimitGb: Math.max(0, numberValue(input, existing, 'trafficLimitGb', 0)),
+    status: textValue(input, existing, 'status', 'active') === 'disabled' ? 'disabled' : 'active',
+    remark: textValue(input, existing, 'remark'),
+    updatedAt: nowIso(),
+    createdAt: existing.createdAt || input.createdAt || nowIso()
+  };
+}
+
 function verifyCustomerLogin(db, username, password) {
   const loginName = String(username || '').trim();
   if (!loginName) return null;
@@ -1583,44 +2575,16 @@ function verifyCustomerLogin(db, username, password) {
 
 function normalizeCustomer(input, existing = {}) {
   const name = textValue(input, existing, 'name');
-  const email = String(hasField(input, 'clientEmail') ? input.clientEmail : existing.clientEmail || '').trim()
-    || `cust_${crypto.randomBytes(4).toString('hex')}`;
-  const clientUuid = String(hasField(input, 'clientUuid') ? input.clientUuid : existing.clientUuid || '').trim()
-    || crypto.randomUUID();
   const loginPassword = hasField(input, 'loginPassword') ? String(input.loginPassword || '') : '';
   const loginUsername = textValue(input, existing, 'loginUsername');
   return {
-    ...existing,
     id: existing.id || id('cus'),
     name,
     contact: textValue(input, existing, 'contact'),
     loginUsername,
     loginPasswordHash: loginPassword ? hashPassword(loginPassword) : existing.loginPasswordHash || '',
     balance: Math.max(0, numberValue(input, existing, 'balance', 0)),
-    selectedPackageId: textValue(input, existing, 'selectedPackageId'),
-    packageName: textValue(input, existing, 'packageName', '当前节点') || '当前节点',
-    amount: numberValue(input, existing, 'amount', 0),
-    expireAt: textValue(input, existing, 'expireAt') || addMonths(null, 1),
-    trafficLimitGb: numberValue(input, existing, 'trafficLimitGb', 100),
     status: textValue(input, existing, 'status', 'active') === 'disabled' ? 'disabled' : 'active',
-    xuiServerId: textValue(input, existing, 'xuiServerId'),
-    inboundId: textValue(input, existing, 'inboundId'),
-    autoCreateInbound: Boolean(hasField(input, 'autoCreateInbound') ? input.autoCreateInbound : existing.autoCreateInbound ?? false),
-    inboundPort: textValue(input, existing, 'inboundPort'),
-    inboundRemark: textValue(input, existing, 'inboundRemark'),
-    inboundTemplate: INBOUND_TEMPLATES.has(textValue(input, existing, 'inboundTemplate', 'vless-tcp')) ? textValue(input, existing, 'inboundTemplate', 'vless-tcp') : 'vless-tcp',
-    inboundSni: textValue(input, existing, 'inboundSni'),
-    inboundHost: textValue(input, existing, 'inboundHost'),
-    inboundPath: textValue(input, existing, 'inboundPath'),
-    inboundGrpcServiceName: textValue(input, existing, 'inboundGrpcServiceName'),
-    inboundCertFile: textValue(input, existing, 'inboundCertFile'),
-    inboundKeyFile: textValue(input, existing, 'inboundKeyFile'),
-    clientId: textValue(input, existing, 'clientId'),
-    clientEmail: email,
-    clientUuid,
-    protocol: textValue(input, existing, 'protocol', 'vless') || 'vless',
-    useSocks: Boolean(hasField(input, 'useSocks') ? input.useSocks : existing.useSocks ?? false),
-    socksNodeId: textValue(input, existing, 'socksNodeId'),
     remark: textValue(input, existing, 'remark'),
     updatedAt: nowIso(),
     createdAt: existing.createdAt || nowIso()
@@ -1629,9 +2593,9 @@ function normalizeCustomer(input, existing = {}) {
 
 function validateCustomerBinding(customer) {
   if (!customer.xuiServerId) throw new Error('请先选择 3x-ui 节点');
-  if (!customer.inboundId && !customer.autoCreateInbound) throw new Error('请填写 3x-ui Inbound ID，或启用自动创建入站');
+  if (!customer.inboundId && !customer.autoCreateInbound) throw new Error('请填写 3x-ui 入站 ID，或启用自动创建入站');
   if (!Number.isInteger(Number(customer.inboundId)) || Number(customer.inboundId) <= 0) {
-    if (customer.inboundId) throw new Error('Inbound ID 必须是 3x-ui 入站列表里的数字 ID，例如 1');
+    if (customer.inboundId) throw new Error('入站 ID 必须是 3x-ui 入站列表里的数字 ID，例如 1');
   }
   if (customer.inboundPort) {
     const port = Number(customer.inboundPort);
@@ -1640,7 +2604,7 @@ function validateCustomerBinding(customer) {
   if (customer.autoCreateInbound && customer.inboundTemplate === 'vless-tls' && (!customer.inboundCertFile || !customer.inboundKeyFile)) {
     throw new Error('TLS 模板需要填写证书文件路径和私钥文件路径');
   }
-  if (!customer.clientEmail) throw new Error('Client Email 不能为空');
+  if (!customer.clientEmail) throw new Error('客户端邮箱不能为空');
 }
 
 function applyServerDefaultTlsPaths(customer, server) {
@@ -2071,55 +3035,6 @@ async function xuiRequest(server, endpoint, options = {}) {
   return xuiFetch(server, endpoint, { ...options, headers });
 }
 
-async function qrDataUrl(text) {
-  qrCodeModule ||= await import('qrcode');
-  return qrCodeModule.toDataURL(text, {
-    errorCorrectionLevel: 'M',
-    margin: 2,
-    width: 260,
-    color: { dark: '#0f172a', light: '#ffffff' }
-  });
-}
-
-function pickSubscriptionLinks(data) {
-  const values = [];
-  const collect = (value) => {
-    const parsed = parseMaybeJson(value);
-    if (Array.isArray(parsed)) return parsed.forEach(collect);
-    if (parsed && typeof parsed === 'object') {
-      for (const key of ['link', 'url', 'uri', 'shareLink', 'subscription', 'sub', 'obj', 'data', 'result', 'items', 'links']) collect(parsed[key]);
-      return;
-    }
-    const text = String(parsed || value || '').trim();
-    if (!text) return;
-    text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).forEach((line) => values.push(line));
-  };
-  collect(data);
-  return [...new Set(values.filter((value) => /^[a-z][a-z0-9+.-]*:\/\//i.test(value)))];
-}
-
-async function getCustomerSubscription(db, customer) {
-  if (!customer?.xuiServerId) throw new Error('当前账号还没有绑定节点');
-  const server = db.xuiServers.find((item) => item.id === customer.xuiServerId);
-  if (!server) throw new Error('绑定的 3-x-ui 节点不存在');
-  const subId = String(customer.clientId || customer.clientEmail || '').trim();
-  if (!subId) throw new Error('当前节点没有订阅 ID，请联系管理员同步节点');
-  const endpoint = withApiPrefix(server, `/panel/api/clients/subLinks/${encodeURIComponent(subId)}`);
-  const result = await xuiRequest(server, endpoint, { method: 'GET' });
-  const links = pickSubscriptionLinks(result.data);
-  if (!links.length) throw new Error('3-x-ui 没有返回可用订阅链接，请确认客户端已启用并完成同步');
-  const text = links.join('\n');
-  const qrText = links[0];
-  return {
-    nodeName: publicNodeName(customer),
-    subId,
-    links,
-    text,
-    qrText,
-    qr: await qrDataUrl(qrText)
-  };
-}
-
 function xuiArray(data) {
   const root = xuiObject(data);
   const obj = parseMaybeJson(data?.obj);
@@ -2527,7 +3442,7 @@ function customerFromXuiClient(server, item, context = {}) {
     id: id('cus'),
     name: clientNameOf(client, email),
     contact: '',
-    packageName: String(client.groupName || client.group_name || client.packageName || '导入节点').trim() || '导入节点',
+    packageName: String(client.groupName || client.group_name || client.packageName || '3-xui 导入').trim() || '3-xui 导入',
     amount: 0,
     expireAt: expiryIsoFromClient(client),
     trafficLimitGb: trafficGbFromClient(client),
@@ -2691,6 +3606,91 @@ async function importCustomersFromXui(db, serverId) {
   };
 }
 
+async function syncServiceNodesFromXui(db, serverId) {
+  const server = db.xuiServers.find((item) => item.id === serverId);
+  if (!server) {
+    const error = new Error('面板节点不存在');
+    error.statusCode = 404;
+    throw error;
+  }
+  const inbounds = await listXuiInboundsFull(server);
+  const serverDefaultsUpdated = applyDetectedTlsDefaultsFromInbounds(server, inbounds.items);
+  let created = 0;
+  let updated = 0;
+  let skipped = 0;
+  const changedNodes = [];
+  const seen = new Set();
+  for (const inbound of inbounds.items) {
+    const inboundId = inboundIdOf(inbound);
+    if (!Number.isInteger(inboundId) || inboundId <= 0 || seen.has(inboundId)) {
+      skipped += 1;
+      continue;
+    }
+    seen.add(inboundId);
+    const existingIndex = db.serviceNodes.findIndex((node) => node.xuiServerId === server.id && String(node.inboundId || '') === String(inboundId));
+    const existing = existingIndex >= 0 ? db.serviceNodes[existingIndex] : null;
+    const tlsPaths = inboundTlsCertPathsOf(inbound);
+    const inboundName = String(inbound?.remark || inbound?.tag || inbound?.name || inboundLabel(inbound) || `入站 ${inboundId}`).trim();
+    const node = normalizeServiceNode({
+      id: existing?.id,
+      name: existing?.name || inboundName,
+      xuiServerId: server.id,
+      inboundId: String(inboundId),
+      autoCreateInbound: false,
+      inboundPort: inboundPortOf(inbound) ? String(inboundPortOf(inbound)) : existing?.inboundPort || '',
+      inboundRemark: String(inbound?.remark || existing?.inboundRemark || '').trim(),
+      inboundTemplate: inboundTemplateOf(inbound),
+      inboundSni: inboundSniOf(inbound) || existing?.inboundSni || '',
+      inboundHost: inboundHostOf(inbound) || existing?.inboundHost || '',
+      inboundPath: inboundPathOf(inbound) || existing?.inboundPath || '',
+      inboundGrpcServiceName: inboundGrpcServiceNameOf(inbound) || existing?.inboundGrpcServiceName || '',
+      inboundCertFile: tlsPaths.certFile || existing?.inboundCertFile || '',
+      inboundKeyFile: tlsPaths.keyFile || existing?.inboundKeyFile || '',
+      amount: existing?.amount ?? 0,
+      trafficLimitGb: existing?.trafficLimitGb ?? 100,
+      useSocks: existing?.useSocks ?? false,
+      socksNodeId: existing?.socksNodeId || '',
+      status: existing?.status || 'enabled',
+      remark: existing?.remark || ''
+    }, existing || {});
+    validateServiceNode(node);
+    if (existingIndex >= 0) {
+      db.serviceNodes[existingIndex] = node;
+      updated += 1;
+    } else {
+      db.serviceNodes.push(node);
+      created += 1;
+    }
+    changedNodes.push(node);
+  }
+  const log = {
+    id: id('log'),
+    customerId: server.id,
+    type: 'service_node_sync',
+    status: 'success',
+    message: `已同步服务节点：新增 ${created}，更新 ${updated}，跳过 ${skipped}`,
+    detail: {
+      endpoint: inbounds.endpoint,
+      total: inbounds.items.length,
+      created,
+      updated,
+      skipped,
+      serverDefaultsUpdated,
+      defaultInboundCertFile: server.defaultInboundCertFile || '',
+      defaultInboundKeyFile: server.defaultInboundKeyFile || ''
+    },
+    createdAt: nowIso()
+  };
+  db.syncLogs.push(log);
+  if (db.syncLogs.length > 1000) db.syncLogs = db.syncLogs.slice(-1000);
+  await mysqlTransaction(async (connection) => {
+    if (serverDefaultsUpdated) await upsertMysqlServerRow(connection, server);
+    for (const node of changedNodes) await upsertMysqlServiceNodeRow(connection, node);
+    await insertMysqlLog(connection, log);
+  });
+  return log.detail;
+}
+
 async function createXuiInbound(server, customer, currentInbounds) {
   const port = pickInboundPort(currentInbounds.items, customer.inboundPort);
   const realityKeys = customer.inboundTemplate === 'vless-reality' ? await getRealityKeyPair(server) : null;
@@ -2701,7 +3701,7 @@ async function createXuiInbound(server, customer, currentInbounds) {
   const created = refreshed.items.find((item) => inboundPortOf(item) === port);
   const inboundId = inboundIdOf(created);
   if (!Number.isInteger(inboundId) || inboundId <= 0) {
-    throw new Error(`已创建端口 ${port} 的入站，但没有读取到新 Inbound ID，请在 3x-ui 后台确认后手动填写`);
+    throw new Error(`已创建端口 ${port} 的入站，但没有读取到新入站 ID，请在 3x-ui 后台确认后手动填写`);
   }
   customer.inboundId = String(inboundId);
   customer.inboundPort = String(port);
@@ -2714,6 +3714,10 @@ async function syncClientToXui(db, customer, action = 'upsert') {
   const server = db.xuiServers.find((item) => item.id === customer.xuiServerId);
   if (!server) throw new Error('用户绑定的 3x-ui 节点不存在，请重新选择节点');
   applyServerDefaultTlsPaths(customer, server);
+  if (action === 'disable' && !customer.inboundId) {
+    return { action: 'skip', skipped: true, reason: 'missing-inbound-id', inboundIds: [], clientEmail: customer.clientEmail };
+  }
+
   validateCustomerBinding(customer);
 
   const inbounds = await listXuiInbounds(server);
@@ -2729,7 +3733,7 @@ async function syncClientToXui(db, customer, action = 'upsert') {
   const inboundExists = checkedInbounds.items.some((item) => inboundIdOf(item) === inboundId);
   if (!inboundExists) {
     const knownIds = checkedInbounds.items.map(inboundLabel).join(', ') || '无';
-    throw new Error(`这个 3x-ui 节点没有 Inbound ID ${inboundId}。可用 ID：${knownIds}`);
+    throw new Error(`这个 3x-ui 节点没有入站 ID ${inboundId}。可用 ID：${knownIds}`);
   }
 
   const client = {
@@ -2841,7 +3845,7 @@ async function syncSocksToXui(db, customer) {
 }
 
 async function deleteXuiClient(server, email) {
-  if (!email) return { skipped: true, reason: '没有 Client Email' };
+  if (!email) return { skipped: true, reason: '没有客户端邮箱' };
   const encoded = encodeURIComponent(email);
   const routes = uniqueRoutes([
     { endpoint: withApiPrefix(server, `/panel/api/clients/del/${encoded}`), method: 'POST' },
@@ -2875,7 +3879,7 @@ async function deleteXuiClientVerified(server, email) {
 
 async function deleteAllInboundClients(server, inboundId) {
   const idValue = Number(inboundId);
-  if (!Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: 'Invalid Inbound ID' };
+  if (!Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: '无效的入站 ID' };
   const routes = uniqueRoutes([
     { endpoint: withApiPrefix(server, `/panel/api/inbounds/${idValue}/delAllClients`), method: 'POST' }
   ]);
@@ -2928,7 +3932,7 @@ async function getXuiInboundById(server, inboundId) {
 async function deleteInboundClientLegacy(server, target, inboundId) {
   const idValue = Number(inboundId);
   const email = String(target?.email || target?.clientEmail || '').trim();
-  if (!email || !Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: '缺少 Email 或 Inbound ID' };
+  if (!email || !Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: '缺少客户端邮箱或入站 ID' };
   let inbound = await getXuiInboundById(server, idValue);
   if (!inbound) {
     const inbounds = await listXuiInboundsFull(server);
@@ -2984,7 +3988,7 @@ async function deleteInboundClientLegacy(server, target, inboundId) {
 
 async function detachXuiClient(server, customer) {
   const email = String(customer?.clientEmail || customer?.email || '').trim();
-  if (!email) return { skipped: true, reason: '没有 Client Email' };
+  if (!email) return { skipped: true, reason: '没有客户端邮箱' };
   const inboundIds = [Number(customer?.inboundId)].filter((value) => Number.isInteger(value) && value > 0);
   if (!inboundIds.length) return deleteXuiClientVerified(server, email);
   const detail = await getXuiClientDetail(server, email);
@@ -3038,7 +4042,7 @@ async function detachXuiClient(server, customer) {
 
 async function deleteXuiInbound(server, inboundId) {
   const idValue = Number(inboundId);
-  if (!Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: '没有有效 Inbound ID' };
+  if (!Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: '没有有效入站 ID' };
   const routes = uniqueRoutes([
     { endpoint: withApiPrefix(server, `/panel/api/inbounds/del/${idValue}`), method: 'POST' },
     { endpoint: withApiPrefix(server, `/panel/api/inbounds/del/${idValue}`), method: 'DELETE' }
@@ -3063,7 +4067,7 @@ async function deleteXuiInbound(server, inboundId) {
 
 async function deleteInboundIfEmpty(server, inboundId) {
   const idValue = Number(inboundId);
-  if (!Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: '没有有效 Inbound ID' };
+  if (!Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: '没有有效入站 ID' };
   const inbounds = await listXuiInboundsFull(server);
   const inbound = inbounds.items.find((item) => inboundIdOf(item) === idValue);
   if (!inbound) return { skipped: true, missing: true, reason: '入站已经不存在' };
@@ -3074,7 +4078,7 @@ async function deleteInboundIfEmpty(server, inboundId) {
 
 async function deleteCustomerInboundIfOwned(server, customer) {
   const idValue = Number(customer?.inboundId);
-  if (!Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: '没有有效 Inbound ID' };
+  if (!Number.isInteger(idValue) || idValue <= 0) return { skipped: true, reason: '没有有效入站 ID' };
   const inbounds = await listXuiInboundsFull(server);
   const inbound = inbounds.items.find((item) => inboundIdOf(item) === idValue);
   if (!inbound) return { skipped: true, missing: true, reason: '入站已经不存在' };
@@ -3114,7 +4118,13 @@ function outboundTagStillUsed(db, customer, config, socks) {
   if (!socks?.tag) return true;
   const usedByRules = Array.isArray(config.routing?.rules) && config.routing.rules.some((rule) => rule?.outboundTag === socks.tag);
   if (usedByRules) return true;
-  return db.customers.some((item) => item.id !== customer.id && item.useSocks && item.socksNodeId === socks.id && item.status !== 'disabled');
+  return db.customerNodes.some((binding) => {
+    if (binding.id === customer.customerNodeId || binding.status === 'disabled') return false;
+    const node = db.serviceNodes.find((item) => item.id === binding.nodeId);
+    if (!node || node.status === 'disabled' || !node.useSocks || node.socksNodeId !== socks.id) return false;
+    const boundCustomer = db.customers.find((item) => item.id === binding.customerId);
+    return boundCustomer && boundCustomer.status !== 'disabled';
+  });
 }
 
 async function cleanupCustomerSocksFromXui(db, customer, server) {
@@ -3156,39 +4166,61 @@ async function cleanupCustomerSocksFromXui(db, customer, server) {
   return { removedRules, removedOutbounds, inboundTag, outboundTag: socks?.tag || '', saveResult, restartResult };
 }
 
-async function cleanupCustomerRemoteResources(db, customer) {
-  if (!customer?.xuiServerId) return { skipped: true, reason: '用户没有绑定 3x-ui 节点', warnings: [] };
-  const server = db.xuiServers.find((item) => item.id === customer.xuiServerId);
-  if (!server) return { skipped: true, reason: '用户绑定的 3x-ui 节点不存在，已跳过远程清理', warnings: ['用户绑定的 3x-ui 节点不存在'] };
+async function cleanupCustomerNodeRemoteResources(db, customer, binding) {
+  const target = customerSyncTarget(db, customer, binding);
+  if (!target?.xuiServerId) return { skipped: true, reason: '用户没有绑定远程节点', warnings: [] };
+  const server = db.xuiServers.find((item) => item.id === target.xuiServerId);
+  if (!server) return { skipped: true, reason: '用户绑定的远程节点不存在，已跳过远程清理', warnings: ['用户绑定的远程节点不存在'] };
 
   const warnings = [];
   let socksResult = { skipped: true };
   let clientResult = { skipped: true };
   let inboundResult = { skipped: true };
+  let serviceNodeResult = { skipped: true };
 
   try {
-    socksResult = await cleanupCustomerSocksFromXui(db, customer, server);
+    socksResult = await cleanupCustomerSocksFromXui(db, target, server);
   } catch (error) {
     socksResult = { failed: true, error: error.message };
     warnings.push(`SOCKS 路由清理失败：${error.message}`);
   }
 
   try {
-    clientResult = await detachXuiClient(server, customer);
+    clientResult = await detachXuiClient(server, target);
   } catch (error) {
     clientResult = { failed: true, error: error.message };
-    warnings.push(`3-xui 客户端删除/解绑失败：${error.message}`);
+    warnings.push(`远程客户端删除/解绑失败：${error.message}`);
   }
 
   try {
-    inboundResult = await deleteCustomerInboundIfOwned(server, customer);
-    if (inboundResult?.skipped && !inboundResult?.missing) warnings.push(`3-xui 入站未删除：${inboundResult.reason || '原因未知'}`);
+    inboundResult = await deleteCustomerInboundIfOwned(server, target);
+    serviceNodeResult = await clearRemovedInboundFromServiceNode(db, target.serviceNodeId, inboundResult);
+    if (inboundResult?.skipped && !inboundResult?.missing) warnings.push(`远程入站未删除：${inboundResult.reason || '原因未知'}`);
   } catch (error) {
     inboundResult = { failed: true, error: error.message };
-    warnings.push(`3-xui 入站删除失败：${error.message}`);
+    warnings.push(`远程入站删除失败：${error.message}`);
   }
 
-  return { clientResult, socksResult, inboundResult, warnings };
+  return { customerNodeId: binding.id, serviceNodeId: binding.nodeId, clientResult, socksResult, inboundResult, serviceNodeResult, warnings };
+}
+
+async function cleanupCustomerRemoteResources(db, customer) {
+  const bindings = customerNodesFor(db, customer.id);
+  if (!bindings.length) return { skipped: true, reason: '用户没有绑定节点', warnings: [] };
+  const results = [];
+  const warnings = [];
+  for (const binding of bindings) {
+    try {
+      const result = await cleanupCustomerNodeRemoteResources(db, customer, binding);
+      results.push(result);
+      if (Array.isArray(result.warnings)) warnings.push(...result.warnings);
+    } catch (error) {
+      const message = `${binding.name || binding.id} 清理失败：${error.message}`;
+      warnings.push(message);
+      results.push({ customerNodeId: binding.id, failed: true, error: error.message, warnings: [message] });
+    }
+  }
+  return { results, warnings };
 }
 
 function buildSocksOutbound(socks) {
@@ -3424,7 +4456,7 @@ async function routeApiUnlocked(req, res, url) {
     return send(res, 200, {
       ok: true,
       installed: !setupRequired,
-      storage: setupRequired ? 'unconfigured' : (isMysqlStorage() ? 'mysql' : 'json'),
+      storage: setupRequired ? 'unconfigured' : 'mysql',
       adminPath: adminPath()
     });
   }
@@ -3444,11 +4476,9 @@ async function routeApiUnlocked(req, res, url) {
     if (!mysql.database) return sendError(res, 400, '请填写数据库名称');
     const nextConfig = { installed: true, db: { client: 'mysql' }, mysql, setupAt: nowIso() };
     const previousConfig = runtimeConfig;
-    const previousClient = DB_CLIENT;
     const previousPool = mysqlPool;
     try {
       runtimeConfig = nextConfig;
-      DB_CLIENT = 'mysql';
       mysqlPool = null;
       await ensureMysqlDatabase(nextConfig);
       await initMysqlStorage();
@@ -3459,10 +4489,15 @@ async function routeApiUnlocked(req, res, url) {
     } catch (error) {
       if (mysqlPool && mysqlPool !== previousPool) await mysqlPool.end().catch(() => {});
       runtimeConfig = previousConfig;
-      DB_CLIENT = previousClient;
       mysqlPool = previousPool;
       return sendError(res, 400, '数据库连接或初始化失败', error.message);
     }
+  }
+
+  if (url.pathname === '/api/public/branding' && req.method === 'GET') {
+    if (setupRequired) return send(res, 200, { ok: true, settings: publicBrandSettings({}) });
+    const db = await readDb();
+    return send(res, 200, { ok: true, settings: publicBrandSettings(db.settings || {}) });
   }
 
   if (url.pathname === '/api/login' && req.method === 'POST') {
@@ -3514,6 +4549,108 @@ async function routeApiUnlocked(req, res, url) {
 
   if (setupRequired) return sendError(res, 428, '请先完成安装向导');
 
+  if (url.pathname === '/api/payments/epay/notify' && ['GET', 'POST'].includes(req.method)) {
+    const body = req.method === 'POST' ? await parseRequestBody(req) : {};
+    const params = { ...Object.fromEntries(url.searchParams), ...body };
+    const db = await readDb();
+    const payments = normalizePaymentSettings({}, db.settings?.payments || {});
+    if (!payments.enabled || !payments.epay.enabled || !verifyEpaySign(params, payments.epay)) return sendText(res, 400, 'fail');
+    if (String(params.pid || '') !== String(payments.epay.pid || '')) return sendText(res, 400, 'fail');
+    if (params.trade_status && params.trade_status !== 'TRADE_SUCCESS') return sendText(res, 400, 'fail');
+    const result = await completeRechargeOrder(params.out_trade_no, {
+      provider: 'epay',
+      payType: String(params.type || '').trim(),
+      amount: params.money,
+      channelTradeNo: params.trade_no || params.api_trade_no || '',
+      rawNotify: params
+    });
+    return sendText(res, result.ok ? 200 : 400, result.ok ? 'success' : 'fail');
+  }
+
+  if (url.pathname === '/api/payments/alipay/notify' && req.method === 'POST') {
+    const params = await parseRequestBody(req);
+    const db = await readDb();
+    const payments = normalizePaymentSettings({}, db.settings?.payments || {});
+    const publicKey = decrypt(payments.alipay.alipayPublicKeyEnc);
+    if (!payments.enabled || !payments.alipay.enabled || !verifyAlipaySign(params, publicKey)) return sendText(res, 400, 'failure');
+    if (String(params.app_id || '') !== String(payments.alipay.appId || '')) return sendText(res, 400, 'failure');
+    if (!['TRADE_SUCCESS', 'TRADE_FINISHED'].includes(String(params.trade_status || ''))) return sendText(res, 400, 'failure');
+    const result = await completeRechargeOrder(params.out_trade_no, {
+      provider: 'alipay_native',
+      payType: 'alipay',
+      amount: params.total_amount || params.receipt_amount,
+      channelTradeNo: params.trade_no || '',
+      rawNotify: params
+    });
+    return sendText(res, result.ok ? 200 : 400, result.ok ? 'success' : 'failure');
+  }
+
+  if (url.pathname === '/api/payments/bepusdt/notify' && ['GET', 'POST'].includes(req.method)) {
+    const params = req.method === 'GET' ? Object.fromEntries(url.searchParams.entries()) : await parseRequestBody(req);
+    const db = await readDb();
+    const payments = normalizePaymentSettings({}, db.settings?.payments || {});
+    const token = decrypt(payments.bepusdt.tokenEnc);
+    const sign = String(params.sign || '');
+    if (!payments.enabled || !payments.bepusdt.enabled || !token || !sign) return sendText(res, 400, 'fail');
+    const expected = crypto.createHash('md5').update(sortedSignContent(params) + token, 'utf8').digest('hex');
+    if (!timingSafeTextEqual(expected, sign)) return sendText(res, 400, 'fail');
+    if (String(params.trade_status || '').toUpperCase() !== 'TRADE_SUCCESS') return sendText(res, 400, 'fail');
+    const result = await completeRechargeOrder(params.out_trade_no, {
+      provider: 'bepusdt_native',
+      payType: String(params.type || payments.bepusdt.tradeType || DEFAULT_BEPUSDT_TRADE_TYPE).trim(),
+      amount: params.money,
+      channelTradeNo: params.trade_no || '',
+      rawNotify: params
+    });
+    return sendText(res, result.ok ? 200 : 400, result.ok ? 'success' : 'fail');
+  }
+
+  if (url.pathname === '/api/payments/wechat/notify' && req.method === 'POST') {
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of req) {
+      size += chunk.length;
+      if (size > MAX_JSON_BODY_BYTES) return send(res, 413, { code: 'FAIL', message: 'Request body too large' });
+      chunks.push(chunk);
+    }
+    const bodyText = Buffer.concat(chunks).toString('utf8');
+    let body = {};
+    try {
+      body = bodyText ? JSON.parse(bodyText) : {};
+    } catch {
+      return send(res, 400, { code: 'FAIL', message: 'Invalid JSON body' });
+    }
+    const db = await readDb();
+    const payments = normalizePaymentSettings({}, db.settings?.payments || {});
+    const apiV3Key = decrypt(payments.wechat.apiV3KeyEnc);
+    if (!payments.enabled || !payments.wechat.enabled || !apiV3Key) return send(res, 400, { code: 'FAIL', message: 'Wechat Pay is not configured' });
+    if (!decrypt(payments.wechat.platformPublicKeyEnc)) return send(res, 400, { code: 'FAIL', message: 'Wechat Pay platform public key is not configured' });
+    if (!verifyWechatNotifySignature(req, bodyText, payments.wechat)) return send(res, 401, { code: 'FAIL', message: 'Invalid signature' });
+    let data;
+    try {
+      data = decryptWechatResource(body.resource, apiV3Key);
+    } catch (error) {
+      return send(res, 400, { code: 'FAIL', message: error.message || 'Decrypt failed' });
+    }
+    if (data.trade_state !== 'SUCCESS') return send(res, 400, { code: 'FAIL', message: 'Trade is not successful' });
+    const total = Number(data.amount?.payer_total ?? data.amount?.total ?? 0) / 100;
+    const result = await completeRechargeOrder(data.out_trade_no, {
+      provider: 'wechat_native',
+      amount: total,
+      channelTradeNo: data.transaction_id || '',
+      rawNotify: body
+    });
+    return send(res, result.ok ? 200 : 400, result.ok ? { code: 'SUCCESS', message: 'success' } : { code: 'FAIL', message: result.message || 'fail' });
+  }
+
+  if (url.pathname === '/api/payments/result' && req.method === 'GET') {
+    const tradeNo = String(url.searchParams.get('trade_no') || '').trim();
+    const db = await readDb();
+    const order = db.rechargeOrders.find((item) => item.tradeNo === tradeNo);
+    if (!order) return sendError(res, 404, '充值订单不存在');
+    return send(res, 200, { ok: true, order: publicRechargeResult(order) });
+  }
+
   const session = await requireAuth(req, res);
   if (!session) return;
 
@@ -3531,88 +4668,166 @@ async function routeApiUnlocked(req, res, url) {
     return send(res, 200, { ok: true, data: publicDb(db), user: session.username, role: 'admin' });
   }
 
+  if (url.pathname === '/api/user/node/link' && req.method === 'GET') {
+    if (!requireUser(session, res)) return;
+    const customer = db.customers.find((item) => item.id === session.customerId);
+    if (!customer || customer.status === 'disabled') return sendError(res, 404, '用户不存在或已停用');
+    const binding = findCustomerNodeForUser(db, customer.id, url.searchParams.get('nodeId'));
+    if (!binding) return sendError(res, 404, '当前节点链接不可用');
+    try {
+      assertCustomerNodeUsable(db, customer, binding);
+      const target = customerSyncTarget(db, customer, binding);
+      if (!target.xuiServerId || !target.clientEmail) return sendError(res, 404, '当前节点链接不可用');
+      const links = await getXuiClientLinks(db, target);
+      if (!links.length) return sendError(res, 404, '没有从后台读取到可用节点链接');
+      return send(res, 200, { ok: true, link: links[0], links });
+    } catch (error) {
+      console.error('读取用户节点链接失败:', error.message);
+      return sendError(res, error.statusCode || 500, '读取节点链接失败，请稍后重试或联系管理员');
+    }
+  }
+
+  if (url.pathname === '/api/user/node/qrcode' && req.method === 'GET') {
+    if (!requireUser(session, res)) return;
+    const customer = db.customers.find((item) => item.id === session.customerId);
+    if (!customer || customer.status === 'disabled') return sendError(res, 404, '用户不存在或已停用');
+    const binding = findCustomerNodeForUser(db, customer.id, url.searchParams.get('nodeId'));
+    if (!binding) return sendError(res, 404, '当前节点二维码不可用');
+    try {
+      assertCustomerNodeUsable(db, customer, binding);
+      const target = customerSyncTarget(db, customer, binding);
+      if (!target.xuiServerId || !target.clientEmail) return sendError(res, 404, '当前节点二维码不可用');
+      const links = await getXuiClientLinks(db, target);
+      if (!links.length) return sendError(res, 404, '没有从后台读取到可用节点二维码');
+      const buffer = await QRCode.toBuffer(links[0], { type: 'png', margin: 1, width: 260, errorCorrectionLevel: 'M' });
+      res.writeHead(200, securityHeaders({ 'Content-Type': 'image/png', 'Cache-Control': 'no-store' }));
+      return res.end(buffer);
+    } catch (error) {
+      console.error('读取用户节点二维码失败:', error.message);
+      return sendError(res, error.statusCode || 500, '读取节点二维码失败，请稍后重试或联系管理员');
+    }
+  }
+
   if (url.pathname === '/api/user/cards/redeem' && req.method === 'POST') {
     if (!requireUser(session, res)) return;
     const body = await parseJson(req);
-    if (isMysqlStorage()) {
-      try {
-        const result = await redeemCardForUserMysql(session.customerId, body.code);
-        return send(res, 200, { ok: true, data: publicUserDb(result.db, result.customer), message: `充值成功，余额增加 ${result.amount}` });
-      } catch (error) {
-        return sendError(res, error.statusCode || 500, error.message || '卡密兑换失败');
-      }
+    try {
+      const result = await redeemCardForUserMysql(session.customerId, body.code);
+      return send(res, 200, { ok: true, data: publicUserDb(result.db, result.customer), message: `充值成功，余额增加 ${result.amount}` });
+    } catch (error) {
+      return sendError(res, error.statusCode || 500, error.message || '卡密兑换失败');
     }
-    const code = normalizeCardCode(body.code);
-    if (!code) return sendError(res, 400, '请填写卡密');
+  }
+
+  if (url.pathname === '/api/user/recharge-orders' && req.method === 'POST') {
+    if (!requireUser(session, res)) return;
+    const body = await parseJson(req);
     const customer = db.customers.find((item) => item.id === session.customerId);
     if (!customer || customer.status === 'disabled') return sendError(res, 404, '用户不存在或已停用');
-    const card = db.cards.find((item) => normalizeCardCode(item.code) === code);
-    if (!card) return sendError(res, 404, '卡密不存在');
-    if (card.status === 'disabled') return sendError(res, 400, '卡密已禁用');
-    if (card.status === 'used') return sendError(res, 400, '卡密已被使用');
-    const amount = Math.max(0, Number(card.amount || 0));
-    const beforeBalance = Number(customer.balance || 0);
-    customer.balance = beforeBalance + amount;
-    customer.updatedAt = nowIso();
-    card.status = 'used';
-    card.usedBy = customer.id;
-    card.usedByName = customer.name;
-    card.usedAt = nowIso();
-    addBalanceLog(db, customer, 'card_redeem', amount, beforeBalance, customer.balance, '用户自助', `兑换卡密 ${card.type || card.batchName || card.id}`, { cardId: card.id, code: card.code, batchId: card.batchId || '', batchName: card.batchName || '' });
-    addLog(db, customer.id, 'card', 'success', `用户兑换卡密，余额增加 ${amount}`, { cardId: card.id, amount });
-    await writeDb(db);
-    return send(res, 200, { ok: true, data: publicUserDb(db, customer), message: `充值成功，余额增加 ${amount}` });
+    const payments = normalizePaymentSettings({}, db.settings?.payments || {});
+    const methodId = String(body.method || '').trim();
+    const method = resolveRechargeMethod(methodId, payments, req);
+    const amount = Number(Number(body.amount || 0).toFixed(2));
+    const methodNames = { alipay: '\u652f\u4ed8\u5b9d', wechat: '\u5fae\u4fe1\u652f\u4ed8', paypal: 'PayPal', usdt: 'USDT' };
+    if (!payments.enabled) return sendError(res, 400, '管理员还没有启用在线充值');
+    if (!method) return sendError(res, 400, `${methodNames[methodId] || '\u652f\u4ed8\u65b9\u5f0f'}\u672a\u914d\u7f6e\u6216\u672a\u542f\u7528`);
+    if (!Number.isFinite(amount) || amount < payments.minAmount) return sendError(res, 400, `最低充值金额为 ${payments.minAmount}`);
+    if (recentPendingOrders(db, customer.id).length >= 20) return sendError(res, 429, '待支付订单较多，请先完成已有订单或稍后再试');
+    const order = normalizeRechargeOrder({
+      customerId: customer.id,
+      customerName: customer.name,
+      provider: method.provider,
+      method: method.method || methodId,
+      payType: method.payType,
+      amount,
+      status: 'pending'
+    });
+    let payUrl = '';
+    let qrCode = '';
+    let qrImage = '';
+    try {
+      if (method.provider === 'alipay_native' && method.alipayMethod === 'precreate') {
+        const precreate = await buildAlipayPrecreatePayment(order, payments, siteOrigin(req));
+        qrCode = precreate.qrCode;
+        qrImage = precreate.qrImage;
+      } else if (method.provider === 'bepusdt_native') {
+        const bepusdt = await buildBepusdtNativePayment(order, payments, siteOrigin(req));
+        payUrl = bepusdt.payUrl;
+        qrCode = bepusdt.qrCode;
+        qrImage = bepusdt.qrImage;
+      } else if (method.provider === 'wechat_native') {
+        if (method.wechatMethod === 'h5') {
+          const wechat = await buildWechatH5Payment(order, payments, siteOrigin(req), req);
+          payUrl = wechat.payUrl;
+        } else {
+          const wechat = await buildWechatNativePayment(order, payments, siteOrigin(req));
+          qrCode = wechat.qrCode;
+          qrImage = wechat.qrImage;
+        }
+      } else {
+        payUrl = method.provider === 'alipay_native'
+          ? buildAlipayPayUrl(order, payments, siteOrigin(req), method.alipayMethod)
+          : buildEpayPayUrl(order, payments, siteOrigin(req));
+      }
+    } catch (error) {
+      return sendError(res, 400, `${methodNames[methodId] || '\u652f\u4ed8\u65b9\u5f0f'}\u672a\u914d\u7f6e\u6216\u672a\u542f\u7528`);
+    }
+    db.rechargeOrders.push(order);
+    if (db.rechargeOrders.length > 2000) db.rechargeOrders = db.rechargeOrders.slice(-2000);
+    await mysqlTransaction((connection) => upsertMysqlRechargeOrderRow(connection, order));
+    const { rawNotify, ...safeOrder } = order;
+    return send(res, 200, { ok: true, payUrl, qrCode, qrImage, order: safeOrder, data: publicUserDb(db, customer) });
   }
 
   if (url.pathname === '/api/user/renew' && req.method === 'POST') {
     if (!requireUser(session, res)) return;
     const body = await parseJson(req);
-    if (isMysqlStorage()) {
-      try {
-        const result = await renewCustomerForUserMysql(session.customerId, body.months);
-        return send(res, 200, { ok: true, data: publicUserDb(result.db, result.customer), detail: result.detail, warning: result.detail.warnings.join('；') });
-      } catch (error) {
-        return sendError(res, error.statusCode || 500, error.message || '续费失败');
-      }
-    }
-    const customer = db.customers.find((item) => item.id === session.customerId);
-    if (!customer || customer.status === 'disabled') return sendError(res, 404, '用户不存在或已停用');
-    if (!customer.xuiServerId) return sendError(res, 400, '当前账号还没有绑定节点，请联系管理员');
-    const months = Math.max(1, Math.floor(Number(body.months || 1)));
-    const unitPrice = Math.max(0, Number(customer.amount || 0));
-    if (unitPrice <= 0) return sendError(res, 400, '管理员还没有设置当前节点续费价格');
-    const price = unitPrice * months;
-    if (Number(customer.balance || 0) < price) return sendError(res, 400, `余额不足，本次续费需要 ${price}`);
-    const oldExpireAt = customer.expireAt;
-    const beforeBalance = Number(customer.balance || 0);
-    customer.balance = beforeBalance - price;
-    customer.expireAt = addMonths(customer.expireAt, months);
-    customer.status = 'active';
-    customer.updatedAt = nowIso();
-    const detail = { months, unitPrice, price, oldExpireAt, newExpireAt: customer.expireAt, warnings: [] };
     try {
-      detail.clientResult = await syncClientToXui(db, customer, 'upsert');
-      detail.socksResult = await syncSocksToXui(db, customer);
+      const result = await renewCustomerNodeForUserMysql(session.customerId, body.nodeId, body.months);
+      const detail = {
+        nodeId: result.customerNode?.id || body.nodeId || '',
+        months: result.detail?.months || 1,
+        price: Number(result.detail?.price || 0),
+        beforeExpireAt: result.detail?.oldExpireAt || '',
+        afterExpireAt: result.detail?.newExpireAt || result.customerNode?.expireAt || ''
+      };
+      return send(res, 200, { ok: true, data: publicUserDb(result.db, result.customer), detail, warning: '' });
     } catch (error) {
-      detail.warnings.push(`续费已扣款，本地已生效，但同步 3-xui 失败：${error.message}`);
+      const statusCode = error.statusCode && error.statusCode < 500 ? error.statusCode : 500;
+      const message = statusCode < 500 ? error.message : '续费失败，请稍后重试或联系管理员';
+      return sendError(res, statusCode, message || '续费失败');
     }
-    addBalanceLog(db, customer, 'user_renew', -price, beforeBalance, customer.balance, '用户自助', `自助续费 ${months} 个月`, detail);
-    addRenewalLog(db, customer, months, price, oldExpireAt, customer.expireAt, 'user', detail.warnings.length ? 'warning' : 'success', `用户自助续费 ${months} 个月`, detail);
-    addLog(db, customer.id, 'renew', detail.warnings.length ? 'warning' : 'success', `用户自助续费 ${months} 个月`, detail);
-    await writeDb(db);
-    return send(res, 200, { ok: true, data: publicUserDb(db, customer), detail, warning: detail.warnings.join('；') });
   }
 
-  if (url.pathname === '/api/user/node/subscription' && req.method === 'GET') {
+  if (url.pathname === '/api/user/profile' && req.method === 'PUT') {
     if (!requireUser(session, res)) return;
+    const body = await parseJson(req);
     const customer = db.customers.find((item) => item.id === session.customerId);
-    if (!customer || customer.status === 'disabled') return sendError(res, 404, '用户不存在或已停用');
+    if (!customer) return sendError(res, 404, '用户不存在');
+    const currentPassword = String(body.currentPassword || '');
+    const nextUsername = String(body.loginUsername || '').trim();
+    const nextPassword = String(body.newPassword || '');
+    const confirmPassword = String(body.confirmPassword || '');
+    if (!customer.loginPasswordHash || !verifyPassword(currentPassword, customer.loginPasswordHash)) return sendError(res, 400, '当前密码不正确');
+    if (!nextUsername) return sendError(res, 400, '请填写登录账号');
+    if (nextPassword && nextPassword.length < 6) return sendError(res, 400, '新密码至少需要 6 位');
+    if (nextPassword !== confirmPassword) return sendError(res, 400, '两次输入的新密码不一致');
+    const changedCustomer = {
+      ...customer,
+      loginUsername: compactText(nextUsername, 191),
+      loginPasswordHash: nextPassword ? hashPassword(nextPassword) : customer.loginPasswordHash,
+      updatedAt: nowIso()
+    };
     try {
-      const subscription = await getCustomerSubscription(db, customer);
-      return send(res, 200, { ok: true, data: subscription });
+      validateCustomerLogin(db, changedCustomer, changedCustomer.id);
     } catch (error) {
-      return sendError(res, error.statusCode || 500, '获取订阅失败', error.message);
+      return sendError(res, 400, error.message);
     }
+    Object.assign(customer, changedCustomer);
+    await mysqlTransaction((connection) => updateMysqlCustomerRow(connection, customer));
+    const token = getCookie(req, sessionCookieName('user')) || getCookie(req, 'xcp_session');
+    if (token) await saveSession(token, { role: 'user', username: customer.loginUsername || customer.name, customerId: customer.id });
+    return send(res, 200, { ok: true, data: publicUserDb(db, customer), user: customer.loginUsername || customer.name, role: 'user' });
   }
 
   if (!requireAdmin(session, res)) return;
@@ -3633,8 +4848,7 @@ async function routeApiUnlocked(req, res, url) {
       passwordHash: hashPassword(newPassword),
       updatedAt: nowIso()
     };
-    if (isMysqlStorage()) await mysqlTransaction((connection) => upsertMysqlSettingsRow(connection, db.settings));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => upsertMysqlSettingsRow(connection, db.settings));
     await deleteSession(getCookie(req, 'xcp_admin_session') || getCookie(req, 'xcp_session'));
     res.writeHead(200, securityHeaders({
       'Content-Type': 'application/json; charset=utf-8',
@@ -3646,13 +4860,15 @@ async function routeApiUnlocked(req, res, url) {
   if (url.pathname === '/api/settings' && req.method === 'PUT') {
     const body = await parseJson(req);
     db.settings ||= { currency: 'CNY', expiryWarningDays: 3 };
+    if (hasField(body, 'brandName')) db.settings.brandName = normalizeBrandName(body.brandName);
+    if (hasField(body, 'logoDataUrl')) db.settings.logoDataUrl = normalizeLogoDataUrl(body.logoDataUrl);
     if (hasField(body, 'purchaseCardUrl')) db.settings.purchaseCardUrl = String(body.purchaseCardUrl || '').trim();
     if (hasField(body, 'currency')) db.settings.currency = String(body.currency || 'CNY').trim() || 'CNY';
     if (hasField(body, 'expiryWarningDays')) db.settings.expiryWarningDays = Math.max(1, Math.floor(Number(body.expiryWarningDays || 3)));
     if (hasField(body, 'adminPath')) db.settings.adminPath = normalizeAdminPath(body.adminPath || '/admin');
+    if (hasField(body, 'paymentSettingsSubmitted')) db.settings.payments = normalizePaymentSettings(body, db.settings.payments || {});
     applyRuntimeSettings(db);
-    if (isMysqlStorage()) await mysqlTransaction((connection) => upsertMysqlSettingsRow(connection, db.settings));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => upsertMysqlSettingsRow(connection, db.settings));
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
 
@@ -3687,14 +4903,10 @@ async function routeApiUnlocked(req, res, url) {
       db.cards.push(card);
       generated.push(card);
     }
-    if (isMysqlStorage()) {
-      await mysqlTransaction(async (connection) => {
-        await upsertMysqlCardBatchRow(connection, batch);
-        for (const card of generated) await insertMysqlGeneratedCardRow(connection, card, batch.prefix, existingCodes);
-      });
-    } else {
-      await writeDb(db);
-    }
+    await mysqlTransaction(async (connection) => {
+      await upsertMysqlCardBatchRow(connection, batch);
+      for (const card of generated) await insertMysqlGeneratedCardRow(connection, card, batch.prefix, existingCodes);
+    });
     return send(res, 200, { ok: true, data: publicDb(db), generated });
   }
 
@@ -3710,8 +4922,7 @@ async function routeApiUnlocked(req, res, url) {
     if (!deletable.length) return sendError(res, 400, '这个分类没有可删除的未使用或已禁用卡密');
     const deletableIds = new Set(deletable.map((card) => card.id));
     db.cards = db.cards.filter((card) => !deletableIds.has(card.id));
-    if (isMysqlStorage()) await mysqlTransaction((connection) => deleteMysqlRows(connection, 'shiye_cards', deletableIds));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => deleteMysqlRows(connection, 'shiye_cards', deletableIds));
     return send(res, 200, {
       ok: true,
       data: publicDb(db),
@@ -3733,14 +4944,10 @@ async function routeApiUnlocked(req, res, url) {
       card.updatedAt = nowIso();
       updated += 1;
     }
-    if (isMysqlStorage()) {
-      const changedCards = db.cards.filter((card) => ids.has(card.id));
-      await mysqlTransaction(async (connection) => {
-        for (const card of changedCards) await upsertMysqlCardRow(connection, card);
-      });
-    } else {
-      await writeDb(db);
-    }
+    const changedCards = db.cards.filter((card) => ids.has(card.id));
+    await mysqlTransaction(async (connection) => {
+      for (const card of changedCards) await upsertMysqlCardRow(connection, card);
+    });
     return send(res, 200, { ok: true, data: publicDb(db), updated });
   }
 
@@ -3758,15 +4965,11 @@ async function routeApiUnlocked(req, res, url) {
       if (hasField(body, 'remark')) card.remark = batch.remark;
       card.updatedAt = nowIso();
     }
-    if (isMysqlStorage()) {
-      const changedCards = db.cards.filter((card) => card.batchId === batch.id);
-      await mysqlTransaction(async (connection) => {
-        await upsertMysqlCardBatchRow(connection, batch);
-        for (const card of changedCards) await upsertMysqlCardRow(connection, card);
-      });
-    } else {
-      await writeDb(db);
-    }
+    const changedCards = db.cards.filter((card) => card.batchId === batch.id);
+    await mysqlTransaction(async (connection) => {
+      await upsertMysqlCardBatchRow(connection, batch);
+      for (const card of changedCards) await upsertMysqlCardRow(connection, card);
+    });
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
   if (batchMatch && req.method === 'DELETE') {
@@ -3779,14 +4982,10 @@ async function routeApiUnlocked(req, res, url) {
     if (!matched.some((card) => card.status === 'used')) {
       db.cardBatches = db.cardBatches.filter((item) => item.id !== batch.id);
     }
-    if (isMysqlStorage()) {
-      await mysqlTransaction(async (connection) => {
-        await deleteMysqlRows(connection, 'shiye_cards', deletableIds);
-        if (!matched.some((card) => card.status === 'used')) await deleteMysqlRows(connection, 'shiye_card_batches', new Set([batch.id]));
-      });
-    } else {
-      await writeDb(db);
-    }
+    await mysqlTransaction(async (connection) => {
+      await deleteMysqlRows(connection, 'shiye_cards', deletableIds);
+      if (!matched.some((card) => card.status === 'used')) await deleteMysqlRows(connection, 'shiye_card_batches', new Set([batch.id]));
+    });
     return send(res, 200, { ok: true, data: publicDb(db), deleted: deletable.length, keptUsed: matched.length - deletable.length });
   }
 
@@ -3796,8 +4995,7 @@ async function routeApiUnlocked(req, res, url) {
     if (!card) return sendError(res, 404, '卡密不存在');
     if (card.status === 'used') return sendError(res, 400, '已使用卡密不能删除，可保留作为审计记录');
     db.cards = db.cards.filter((item) => item.id !== cardMatch[1]);
-    if (isMysqlStorage()) await mysqlTransaction((connection) => deleteMysqlRows(connection, 'shiye_cards', new Set([card.id])));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => deleteMysqlRows(connection, 'shiye_cards', new Set([card.id])));
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
   if (cardMatch && req.method === 'PUT') {
@@ -3807,8 +5005,7 @@ async function routeApiUnlocked(req, res, url) {
     if (['unused', 'disabled'].includes(body.status)) card.status = body.status;
     card.remark = String(body.remark ?? card.remark ?? '').trim();
     card.updatedAt = nowIso();
-    if (isMysqlStorage()) await mysqlTransaction((connection) => upsertMysqlCardRow(connection, card));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => upsertMysqlCardRow(connection, card));
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
 
@@ -3817,8 +5014,7 @@ async function routeApiUnlocked(req, res, url) {
     const server = normalizeServer(body);
     if (!server.name || !server.host) return sendError(res, 400, '请填写节点名称和地址');
     db.xuiServers.push(server);
-    if (isMysqlStorage()) await mysqlTransaction((connection) => upsertMysqlServerRow(connection, server));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => upsertMysqlServerRow(connection, server));
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
 
@@ -3828,46 +5024,71 @@ async function routeApiUnlocked(req, res, url) {
     const index = db.xuiServers.findIndex((item) => item.id === serverMatch[1]);
     if (index < 0) return sendError(res, 404, '3x-ui 节点不存在');
     db.xuiServers[index] = normalizeServer(body, db.xuiServers[index]);
-    if (isMysqlStorage()) await mysqlTransaction((connection) => upsertMysqlServerRow(connection, db.xuiServers[index]));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => upsertMysqlServerRow(connection, db.xuiServers[index]));
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
   if (serverMatch && req.method === 'DELETE') {
+    const bound = db.serviceNodes.some((item) => item.xuiServerId === serverMatch[1]);
+    if (bound) return sendError(res, 400, '该面板节点已有服务节点引用，请先删除或迁移服务节点');
     db.xuiServers = db.xuiServers.filter((item) => item.id !== serverMatch[1]);
-    if (isMysqlStorage()) await mysqlTransaction((connection) => deleteMysqlRows(connection, 'shiye_xui_servers', new Set([serverMatch[1]])));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => deleteMysqlRows(connection, 'shiye_xui_servers', new Set([serverMatch[1]])));
     return send(res, 200, { ok: true, data: publicDb(db) });
+  }
+
+  if (url.pathname === '/api/service-nodes' && req.method === 'POST') {
+    const body = await parseJson(req);
+    const node = normalizeServiceNode(body);
+    try {
+      validateServiceNode(node);
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+    db.serviceNodes.push(node);
+    await mysqlTransaction((connection) => upsertMysqlServiceNodeRow(connection, node));
+    return send(res, 200, { ok: true, data: publicDb(db) });
+  }
+
+  const serviceNodeMatch = url.pathname.match(/^\/api\/service-nodes\/([^/]+)$/);
+  if (serviceNodeMatch && req.method === 'PUT') {
+    const body = await parseJson(req);
+    const index = db.serviceNodes.findIndex((item) => item.id === serviceNodeMatch[1]);
+    if (index < 0) return sendError(res, 404, '服务节点不存在');
+    const node = normalizeServiceNode(body, db.serviceNodes[index]);
+    try {
+      validateServiceNode(node);
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+    db.serviceNodes[index] = node;
+    await mysqlTransaction((connection) => upsertMysqlServiceNodeRow(connection, node));
+    return send(res, 200, { ok: true, data: publicDb(db) });
+  }
+  if (serviceNodeMatch && req.method === 'DELETE') {
+    const bound = db.customerNodes.some((item) => item.nodeId === serviceNodeMatch[1]);
+    if (bound) return sendError(res, 400, '这个服务节点已有用户绑定，请先解绑用户节点');
+    db.serviceNodes = db.serviceNodes.filter((item) => item.id !== serviceNodeMatch[1]);
+    await mysqlTransaction((connection) => deleteMysqlRows(connection, 'shiye_service_nodes', new Set([serviceNodeMatch[1]])));
+    return send(res, 200, { ok: true, data: publicDb(db) });
+  }
+
+  const syncServerNodesMatch = url.pathname.match(/^\/api\/xui-servers\/([^/]+)\/sync-service-nodes$/);
+  if (syncServerNodesMatch && req.method === 'POST') {
+    try {
+      const detail = await syncServiceNodesFromXui(db, syncServerNodesMatch[1]);
+      return send(res, 200, {
+        ok: true,
+        data: publicDb(db),
+        detail,
+        message: `同步完成：新增 ${detail.created}，更新 ${detail.updated}，跳过 ${detail.skipped}`
+      });
+    } catch (error) {
+      return sendError(res, error.statusCode || 500, '同步节点失败', error.message);
+    }
   }
 
   const importServerMatch = url.pathname.match(/^\/api\/xui-servers\/([^/]+)\/import-customers$/);
   if (importServerMatch && req.method === 'POST') {
-    try {
-      const detail = await importCustomersFromXui(db, importServerMatch[1]);
-      if (isMysqlStorage()) {
-        await mysqlTransaction(async (connection) => {
-          for (const customer of db.customers.filter((item) => item.xuiServerId === importServerMatch[1])) {
-            await updateMysqlCustomerRow(connection, customer);
-          }
-          const importedServer = db.xuiServers.find((item) => item.id === importServerMatch[1]);
-          if (importedServer) await upsertMysqlServerRow(connection, importedServer);
-          for (const node of db.socksNodes) await upsertMysqlSocksRow(connection, node);
-          const importLog = db.syncLogs[db.syncLogs.length - 1];
-          if (importLog) await insertMysqlLog(connection, importLog);
-        });
-      } else {
-        await writeDb(db);
-      }
-      return send(res, 200, { ok: true, data: publicDb(db), detail });
-    } catch (error) {
-      addLog(db, importServerMatch[1], 'import', 'failed', error.message);
-      if (isMysqlStorage()) {
-        const importLog = db.syncLogs[db.syncLogs.length - 1];
-        await mysqlTransaction((connection) => insertMysqlLog(connection, importLog));
-      } else {
-        await writeDb(db);
-      }
-      return sendError(res, error.statusCode || 500, '同步 3-xui 用户失败', error.message);
-    }
+    return sendError(res, 410, '旧版同步用户入口已停用', '请先创建用户和服务节点，再在用户节点管理里绑定节点。');
   }
 
   if (url.pathname === '/api/socks-nodes' && req.method === 'POST') {
@@ -3875,8 +5096,7 @@ async function routeApiUnlocked(req, res, url) {
     const node = normalizeSocks(body);
     if (!node.name || !node.address) return sendError(res, 400, '请填写 SOCKS 名称和地址');
     db.socksNodes.push(node);
-    if (isMysqlStorage()) await mysqlTransaction((connection) => upsertMysqlSocksRow(connection, node));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => upsertMysqlSocksRow(connection, node));
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
 
@@ -3886,14 +5106,14 @@ async function routeApiUnlocked(req, res, url) {
     const index = db.socksNodes.findIndex((item) => item.id === socksMatch[1]);
     if (index < 0) return sendError(res, 404, 'SOCKS 节点不存在');
     db.socksNodes[index] = normalizeSocks(body, db.socksNodes[index]);
-    if (isMysqlStorage()) await mysqlTransaction((connection) => upsertMysqlSocksRow(connection, db.socksNodes[index]));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => upsertMysqlSocksRow(connection, db.socksNodes[index]));
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
   if (socksMatch && req.method === 'DELETE') {
+    const bound = db.serviceNodes.some((item) => item.socksNodeId === socksMatch[1]);
+    if (bound) return sendError(res, 400, '该 SOCKS 出站已有服务节点引用，请先删除或迁移服务节点');
     db.socksNodes = db.socksNodes.filter((item) => item.id !== socksMatch[1]);
-    if (isMysqlStorage()) await mysqlTransaction((connection) => deleteMysqlRows(connection, 'shiye_socks_nodes', new Set([socksMatch[1]])));
-    else await writeDb(db);
+    await mysqlTransaction((connection) => deleteMysqlRows(connection, 'shiye_socks_nodes', new Set([socksMatch[1]])));
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
 
@@ -3909,14 +5129,10 @@ async function routeApiUnlocked(req, res, url) {
     db.customers.push(customer);
     addLog(db, customer.id, 'customer', 'success', '用户已创建');
     const createdLog = db.syncLogs[db.syncLogs.length - 1];
-    if (isMysqlStorage()) {
-      await mysqlTransaction(async (connection) => {
-        await updateMysqlCustomerRow(connection, customer);
-        await insertMysqlLog(connection, createdLog);
-      });
-    } else {
-      await writeDb(db);
-    }
+    await mysqlTransaction(async (connection) => {
+      await updateMysqlCustomerRow(connection, customer);
+      await insertMysqlLog(connection, createdLog);
+    });
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
 
@@ -3941,15 +5157,11 @@ async function routeApiUnlocked(req, res, url) {
     const changedCustomer = db.customers[index];
     const balanceLog = afterBalance !== beforeBalance ? db.balanceLogs[db.balanceLogs.length - 1] : null;
     const updateLog = db.syncLogs[db.syncLogs.length - 1];
-    if (isMysqlStorage()) {
-      await mysqlTransaction(async (connection) => {
-        await updateMysqlCustomerRow(connection, changedCustomer);
-        if (balanceLog) await insertMysqlBalanceLog(connection, balanceLog);
-        await insertMysqlLog(connection, updateLog);
-      });
-    } else {
-      await writeDb(db);
-    }
+    await mysqlTransaction(async (connection) => {
+      await updateMysqlCustomerRow(connection, changedCustomer);
+      if (balanceLog) await insertMysqlBalanceLog(connection, balanceLog);
+      await insertMysqlLog(connection, updateLog);
+    });
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
   if (customerMatch && req.method === 'DELETE') {
@@ -3957,18 +5169,141 @@ async function routeApiUnlocked(req, res, url) {
     if (!customer) return sendError(res, 404, '用户不存在');
     const cleanup = await cleanupCustomerRemoteResources(db, customer);
     db.customers = db.customers.filter((item) => item.id !== customerMatch[1]);
+    const bindingIds = new Set(db.customerNodes.filter((item) => item.customerId === customer.id).map((item) => item.id));
+    db.customerNodes = db.customerNodes.filter((item) => item.customerId !== customer.id);
     const hasWarnings = Array.isArray(cleanup.warnings) && cleanup.warnings.length > 0;
-    addLog(db, customer.id, 'delete', hasWarnings ? 'warning' : 'success', hasWarnings ? '本地用户已删除，远程清理存在警告' : '用户已删除，并已同步清理 3-xui 资源', cleanup);
+    addLog(db, customer.id, 'delete', hasWarnings ? 'warning' : 'success', hasWarnings ? '本地用户已删除，远程清理存在警告' : '用户已删除，并已同步清理远程资源', cleanup);
     const deleteLog = db.syncLogs[db.syncLogs.length - 1];
-    if (isMysqlStorage()) {
-      await mysqlTransaction(async (connection) => {
-        await deleteMysqlRows(connection, 'shiye_customers', new Set([customer.id]));
-        await insertMysqlLog(connection, deleteLog);
-      });
-    } else {
-      await writeDb(db);
-    }
+    await mysqlTransaction(async (connection) => {
+      await deleteMysqlRows(connection, 'shiye_customers', new Set([customer.id]));
+      await deleteMysqlRows(connection, 'shiye_customer_nodes', bindingIds);
+      await insertMysqlLog(connection, deleteLog);
+    });
     return send(res, 200, { ok: true, data: publicDb(db), detail: cleanup, warning: hasWarnings ? cleanup.warnings.join('；') : '' });
+  }
+
+  const customerNodesMatch = url.pathname.match(/^\/api\/customers\/([^/]+)\/nodes$/);
+  if (customerNodesMatch && req.method === 'POST') {
+    const body = await parseJson(req);
+    const customer = db.customers.find((item) => item.id === customerNodesMatch[1]);
+    if (!customer) return sendError(res, 404, '用户不存在');
+    const node = db.serviceNodes.find((item) => item.id === String(body.nodeId || '').trim());
+    const binding = normalizeCustomerNode({
+      ...body,
+      customerId: customer.id,
+      name: body.name || node?.name || '',
+      trafficLimitGb: body.trafficLimitGb || node?.trafficLimitGb || 0
+    });
+    try {
+      validateCustomerNodeBinding(db, binding);
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+    db.customerNodes.push(binding);
+    addLog(db, customer.id, 'node', 'success', `已绑定节点 ${binding.name || node?.name || binding.id}`, { customerNodeId: binding.id, serviceNodeId: binding.nodeId });
+    const syncLog = db.syncLogs[db.syncLogs.length - 1];
+    await mysqlTransaction(async (connection) => {
+      await upsertMysqlCustomerNodeRow(connection, binding);
+      await insertMysqlLog(connection, syncLog);
+    });
+    return send(res, 200, { ok: true, data: publicDb(db) });
+  }
+
+  const customerNodeMatch = url.pathname.match(/^\/api\/customers\/([^/]+)\/nodes\/([^/]+)$/);
+  if (customerNodeMatch && req.method === 'PUT') {
+    const body = await parseJson(req);
+    const customer = db.customers.find((item) => item.id === customerNodeMatch[1]);
+    if (!customer) return sendError(res, 404, '用户不存在');
+    const index = db.customerNodes.findIndex((item) => item.id === customerNodeMatch[2] && item.customerId === customer.id);
+    if (index < 0) return sendError(res, 404, '用户节点不存在');
+    const binding = normalizeCustomerNode({ ...body, customerId: customer.id }, db.customerNodes[index]);
+    try {
+      validateCustomerNodeBinding(db, binding);
+    } catch (error) {
+      return sendError(res, 400, error.message);
+    }
+    db.customerNodes[index] = binding;
+    addLog(db, customer.id, 'node', 'success', `已更新用户节点 ${binding.name || binding.id}`, { customerNodeId: binding.id, serviceNodeId: binding.nodeId });
+    const syncLog = db.syncLogs[db.syncLogs.length - 1];
+    await mysqlTransaction(async (connection) => {
+      await upsertMysqlCustomerNodeRow(connection, binding);
+      await insertMysqlLog(connection, syncLog);
+    });
+    return send(res, 200, { ok: true, data: publicDb(db) });
+  }
+  if (customerNodeMatch && req.method === 'DELETE') {
+    const customer = db.customers.find((item) => item.id === customerNodeMatch[1]);
+    if (!customer) return sendError(res, 404, '用户不存在');
+    const binding = db.customerNodes.find((item) => item.id === customerNodeMatch[2] && item.customerId === customer.id);
+    if (!binding) return sendError(res, 404, '用户节点不存在');
+    let cleanup = { skipped: true, warnings: [] };
+    try {
+      cleanup = await cleanupCustomerNodeRemoteResources(db, customer, binding);
+    } catch (error) {
+      cleanup = { failed: true, error: error.message, warnings: [error.message] };
+    }
+    db.customerNodes = db.customerNodes.filter((item) => item.id !== binding.id);
+    const hasWarnings = Array.isArray(cleanup.warnings) && cleanup.warnings.length > 0;
+    addLog(db, customer.id, 'node_delete', hasWarnings ? 'warning' : 'success', hasWarnings ? '用户节点已删除，远程清理存在警告' : '用户节点已删除，并已同步清理远程资源', cleanup);
+    const syncLog = db.syncLogs[db.syncLogs.length - 1];
+    await mysqlTransaction(async (connection) => {
+      await deleteMysqlRows(connection, 'shiye_customer_nodes', new Set([binding.id]));
+      await insertMysqlLog(connection, syncLog);
+    });
+    return send(res, 200, { ok: true, data: publicDb(db), detail: cleanup, warning: hasWarnings ? cleanup.warnings.join('；') : '' });
+  }
+
+  const customerNodeSyncMatch = url.pathname.match(/^\/api\/customers\/([^/]+)\/nodes\/([^/]+)\/sync$/);
+  if (customerNodeSyncMatch && req.method === 'POST') {
+    const customer = db.customers.find((item) => item.id === customerNodeSyncMatch[1]);
+    if (!customer) return sendError(res, 404, '用户不存在');
+    const binding = db.customerNodes.find((item) => item.id === customerNodeSyncMatch[2] && item.customerId === customer.id);
+    if (!binding) return sendError(res, 404, '用户节点不存在');
+    try {
+      const detail = await syncCustomerNodeToRemote(db, customer, binding, customer.status === 'disabled' || binding.status === 'disabled' ? 'disable' : 'upsert');
+      addLog(db, customer.id, 'sync', 'success', `已同步用户节点 ${binding.name || binding.id}`, { customerNodeId: binding.id, serviceNodeId: binding.nodeId, clientResult: detail.clientResult, socksResult: detail.socksResult });
+      const syncLog = db.syncLogs[db.syncLogs.length - 1];
+      await mysqlTransaction((connection) => insertMysqlLog(connection, syncLog));
+      return send(res, 200, { ok: true, data: publicDb(db), detail });
+    } catch (error) {
+      addLog(db, customer.id, 'sync', 'failed', error.message, { customerNodeId: binding.id, serviceNodeId: binding.nodeId });
+      const syncLog = db.syncLogs[db.syncLogs.length - 1];
+      await mysqlTransaction((connection) => insertMysqlLog(connection, syncLog));
+      return sendError(res, error.statusCode || 500, '同步失败', error.message);
+    }
+  }
+
+  const customerNodeRenewMatch = url.pathname.match(/^\/api\/customers\/([^/]+)\/nodes\/([^/]+)\/renew$/);
+  if (customerNodeRenewMatch && req.method === 'POST') {
+    const body = await parseJson(req);
+    const customer = db.customers.find((item) => item.id === customerNodeRenewMatch[1]);
+    if (!customer) return sendError(res, 404, '用户不存在');
+    const binding = db.customerNodes.find((item) => item.id === customerNodeRenewMatch[2] && item.customerId === customer.id);
+    if (!binding) return sendError(res, 404, '用户节点不存在');
+    const serviceNode = db.serviceNodes.find((item) => item.id === binding.nodeId);
+    if (!serviceNode) return sendError(res, 404, '服务节点不存在');
+    const months = Math.max(1, Math.floor(Number(body.months || 1)));
+    const oldExpireAt = binding.expireAt;
+    const changedBinding = { ...binding, expireAt: addMonths(binding.expireAt, months), status: 'active', updatedAt: nowIso() };
+    const syncDb = { ...db, customerNodes: db.customerNodes.map((item) => item.id === changedBinding.id ? changedBinding : item) };
+    try {
+      const detail = await syncCustomerNodeToRemote(syncDb, customer, changedBinding, 'upsert');
+      db.serviceNodes = syncDb.serviceNodes;
+      const index = db.customerNodes.findIndex((item) => item.id === binding.id);
+      db.customerNodes[index] = changedBinding;
+      addRenewalLog(db, customer, months, 0, oldExpireAt, changedBinding.expireAt, 'admin', 'success', `管理员续费 ${changedBinding.name || serviceNode.name || '节点'} ${months} 个月`, { customerNodeId: binding.id, serviceNodeId: binding.nodeId, oldExpireAt, newExpireAt: changedBinding.expireAt, ...detail });
+      addLog(db, customer.id, 'renew', 'success', `已续费用户节点 ${months} 个月`, { customerNodeId: binding.id, serviceNodeId: binding.nodeId, oldExpireAt, newExpireAt: changedBinding.expireAt, ...detail });
+      const renewalLog = db.renewalLogs[db.renewalLogs.length - 1];
+      const syncLog = db.syncLogs[db.syncLogs.length - 1];
+      await mysqlTransaction(async (connection) => {
+        await upsertMysqlCustomerNodeRow(connection, changedBinding);
+        await insertMysqlRenewalLog(connection, renewalLog);
+        await insertMysqlLog(connection, syncLog);
+      });
+      return send(res, 200, { ok: true, data: publicDb(db), detail });
+    } catch (error) {
+      return sendError(res, error.statusCode || 500, '续费失败', error.message);
+    }
   }
 
   const balanceMatch = url.pathname.match(/^\/api\/customers\/([^/]+)\/balance-adjust$/);
@@ -3992,55 +5327,17 @@ async function routeApiUnlocked(req, res, url) {
     addLog(db, customer.id, 'balance', 'success', `${modeText} ${amount}`, { mode, amount, beforeBalance, afterBalance: customer.balance });
     const balanceLog = db.balanceLogs[db.balanceLogs.length - 1];
     const syncLog = db.syncLogs[db.syncLogs.length - 1];
-    if (isMysqlStorage()) {
-      await mysqlTransaction(async (connection) => {
-        await updateMysqlCustomerRow(connection, customer);
-        await insertMysqlBalanceLog(connection, balanceLog);
-        await insertMysqlLog(connection, syncLog);
-      });
-    } else {
-      await writeDb(db);
-    }
+    await mysqlTransaction(async (connection) => {
+      await updateMysqlCustomerRow(connection, customer);
+      await insertMysqlBalanceLog(connection, balanceLog);
+      await insertMysqlLog(connection, syncLog);
+    });
     return send(res, 200, { ok: true, data: publicDb(db) });
   }
 
   const renewMatch = url.pathname.match(/^\/api\/customers\/([^/]+)\/renew$/);
   if (renewMatch && req.method === 'POST') {
-    const body = await parseJson(req);
-    const customer = db.customers.find((item) => item.id === renewMatch[1]);
-    if (!customer) return sendError(res, 404, '用户不存在');
-    const months = Math.max(1, Math.floor(Number(body.months || 1)));
-    const oldExpireAt = customer.expireAt;
-    customer.expireAt = addMonths(customer.expireAt, months);
-    customer.status = 'active';
-    customer.amount = Number(body.amount ?? customer.amount ?? 0);
-    customer.updatedAt = nowIso();
-    const detail = { months, oldExpireAt, newExpireAt: customer.expireAt, amount: customer.amount, warnings: [] };
-    if (customer.xuiServerId) {
-      try {
-        detail.clientResult = await syncClientToXui(db, customer, 'upsert');
-        detail.socksResult = await syncSocksToXui(db, customer);
-      } catch (error) {
-        detail.warnings.push(`本地续费已生效，但同步 3-xui 失败：${error.message}`);
-      }
-    } else {
-      detail.warnings.push('用户未绑定 3-xui 节点，仅更新本地到期时间');
-    }
-    const status = detail.warnings.length ? 'warning' : 'success';
-    addRenewalLog(db, customer, months, 0, oldExpireAt, customer.expireAt, 'admin', status, `管理员续费 ${months} 个月`, detail);
-    addLog(db, customer.id, 'renew', status, `已续费 ${months} 个月`, detail);
-    const renewalLog = db.renewalLogs[db.renewalLogs.length - 1];
-    const syncLog = db.syncLogs[db.syncLogs.length - 1];
-    if (isMysqlStorage()) {
-      await mysqlTransaction(async (connection) => {
-        await updateMysqlCustomerRow(connection, customer);
-        await insertMysqlRenewalLog(connection, renewalLog);
-        await insertMysqlLog(connection, syncLog);
-      });
-    } else {
-      await writeDb(db);
-    }
-    return send(res, 200, { ok: true, data: publicDb(db), detail, warning: detail.warnings.join('；') });
+    return sendError(res, 410, '旧版整用户续费入口已停用，请在用户节点管理中选择单个节点续费');
   }
 
   const toggleMatch = url.pathname.match(/^\/api\/customers\/([^/]+)\/toggle$/);
@@ -4050,25 +5347,18 @@ async function routeApiUnlocked(req, res, url) {
     customer.status = customer.status === 'disabled' ? 'active' : 'disabled';
     customer.updatedAt = nowIso();
     const detail = { status: customer.status, warnings: [] };
-    if (customer.xuiServerId) {
-      try {
-        detail.clientResult = await syncClientToXui(db, customer, customer.status === 'disabled' ? 'disable' : 'upsert');
-        detail.socksResult = await syncSocksToXui(db, customer);
-      } catch (error) {
-        detail.warnings.push(`本地状态已修改，但同步 3-xui 失败：${error.message}`);
-      }
+    try {
+      detail.nodes = await syncAllCustomerNodes(db, customer, customer.status === 'disabled' ? 'disable' : 'upsert');
+    } catch (error) {
+      detail.warnings.push(`本地状态已修改，但同步远程节点失败：${error.message}`);
     }
     const status = detail.warnings.length ? 'warning' : 'success';
     addLog(db, customer.id, 'status', status, customer.status === 'disabled' ? '用户已停用' : '用户已启用', detail);
     const syncLog = db.syncLogs[db.syncLogs.length - 1];
-    if (isMysqlStorage()) {
-      await mysqlTransaction(async (connection) => {
-        await updateMysqlCustomerRow(connection, customer);
-        await insertMysqlLog(connection, syncLog);
-      });
-    } else {
-      await writeDb(db);
-    }
+    await mysqlTransaction(async (connection) => {
+      await updateMysqlCustomerRow(connection, customer);
+      await insertMysqlLog(connection, syncLog);
+    });
     return send(res, 200, { ok: true, data: publicDb(db), detail, warning: detail.warnings.join('；') });
   }
 
@@ -4077,24 +5367,18 @@ async function routeApiUnlocked(req, res, url) {
     const customer = db.customers.find((item) => item.id === syncMatch[1]);
     if (!customer) return sendError(res, 404, '用户不存在');
     try {
-      const clientResult = await syncClientToXui(db, customer, customer.status === 'disabled' ? 'disable' : 'upsert');
-      const socksResult = await syncSocksToXui(db, customer);
-      addLog(db, customer.id, 'sync', 'success', '已同步到 3x-ui', { clientResult, socksResult });
+      const results = await syncAllCustomerNodes(db, customer, customer.status === 'disabled' ? 'disable' : 'upsert');
+      addLog(db, customer.id, 'sync', 'success', `已同步 ${results.length} 个用户节点`, { nodes: results });
       const syncLog = db.syncLogs[db.syncLogs.length - 1];
-      if (isMysqlStorage()) {
-        await mysqlTransaction(async (connection) => {
-          await updateMysqlCustomerRow(connection, customer);
-          await insertMysqlLog(connection, syncLog);
-        });
-      } else {
-        await writeDb(db);
-      }
-      return send(res, 200, { ok: true, data: publicDb(db), detail: { clientResult, socksResult } });
+      await mysqlTransaction(async (connection) => {
+        await updateMysqlCustomerRow(connection, customer);
+        await insertMysqlLog(connection, syncLog);
+      });
+      return send(res, 200, { ok: true, data: publicDb(db), detail: { nodes: results } });
     } catch (error) {
       addLog(db, customer.id, 'sync', 'failed', error.message);
       const syncLog = db.syncLogs[db.syncLogs.length - 1];
-      if (isMysqlStorage()) await mysqlTransaction((connection) => insertMysqlLog(connection, syncLog));
-      else await writeDb(db);
+      await mysqlTransaction((connection) => insertMysqlLog(connection, syncLog));
       return sendError(res, error.statusCode || 500, '同步失败', error.message);
     }
   }
@@ -4102,36 +5386,34 @@ async function routeApiUnlocked(req, res, url) {
   if (url.pathname === '/api/maintenance/disable-expired' && req.method === 'POST') {
     let count = 0;
     const warnings = [];
-    const changedCustomers = [];
-    for (const customer of db.customers) {
-      if (customer.status !== 'disabled' && customer.expireAt && new Date(customer.expireAt) < new Date()) {
-        customer.status = 'disabled';
-        customer.updatedAt = nowIso();
-        const detail = { status: customer.status, reason: 'expired', warnings: [] };
-        if (customer.xuiServerId) {
-          try {
-            detail.clientResult = await syncClientToXui(db, customer, 'disable');
-            detail.socksResult = await syncSocksToXui(db, customer);
-          } catch (error) {
-            const message = `${customer.name || customer.clientEmail || customer.id} 同步失败：${error.message}`;
-            detail.warnings.push(message);
-            warnings.push(message);
-          }
-        }
-        addLog(db, customer.id, 'status', detail.warnings.length ? 'warning' : 'success', '过期用户已自动停用', detail);
-        changedCustomers.push(customer);
-        count += 1;
+    const changedBindings = [];
+    for (const binding of db.customerNodes) {
+      if (binding.status === 'disabled' || !binding.expireAt || new Date(binding.expireAt) >= new Date()) continue;
+      const customer = db.customers.find((item) => item.id === binding.customerId);
+      if (!customer) continue;
+      const changedBinding = { ...binding, status: 'disabled', updatedAt: nowIso() };
+      const syncDb = { ...db, customerNodes: db.customerNodes.map((item) => item.id === changedBinding.id ? changedBinding : item) };
+      const detail = { status: changedBinding.status, reason: 'expired', customerNodeId: binding.id, warnings: [] };
+      try {
+        const syncDetail = await syncCustomerNodeToRemote(syncDb, customer, changedBinding, 'disable');
+        detail.clientResult = syncDetail.clientResult;
+        detail.socksResult = syncDetail.socksResult;
+        detail.serviceNodeResult = syncDetail.serviceNodeResult;
+      } catch (error) {
+        const message = `${customer.name || customer.id} / ${binding.name || binding.id} 同步失败：${error.message}`;
+        detail.warnings.push(message);
+        warnings.push(message);
       }
+      changedBindings.push(changedBinding);
+      addLog(db, customer.id, 'status', detail.warnings.length ? 'warning' : 'success', '过期用户节点已自动停用', detail);
+      count += 1;
     }
-    if (isMysqlStorage()) {
-      const logs = db.syncLogs.slice(-count);
-      await mysqlTransaction(async (connection) => {
-        for (const customer of changedCustomers) await updateMysqlCustomerRow(connection, customer);
-        for (const log of logs) await insertMysqlLog(connection, log);
-      });
-    } else {
-      await writeDb(db);
-    }
+    db.customerNodes = db.customerNodes.map((item) => changedBindings.find((binding) => binding.id === item.id) || item);
+    const logs = db.syncLogs.slice(-count);
+    await mysqlTransaction(async (connection) => {
+      for (const binding of changedBindings) await upsertMysqlCustomerNodeRow(connection, binding);
+      for (const log of logs) await insertMysqlLog(connection, log);
+    });
     return send(res, 200, { ok: true, count, data: publicDb(db), warning: warnings.join('；') });
   }
 
@@ -4143,7 +5425,7 @@ async function routeApiUnlocked(req, res, url) {
       const inbounds = await listXuiInbounds(server);
       const ids = inbounds.items.map(inboundLabel).join(', ');
       const message = ids
-        ? `3x-ui 节点连接成功，可用 Inbound ID：${ids}`
+        ? `3x-ui 节点连接成功，可用入站 ID：${ids}`
         : `3x-ui 节点连接成功，但没有读取到入站。请先在 3x-ui 创建入站。接口：${inbounds.endpoint}`;
       return send(res, 200, { ok: true, message, endpoint: inbounds.endpoint, inbounds: inbounds.items, detail: inbounds.raw });
     } catch (error) {
@@ -4175,7 +5457,8 @@ async function serveStatic(req, res, url) {
     return res.end('Bad request');
   }
   const isAdminPage = requestPath === adminPath() || requestPath === `${adminPath()}/`;
-  const filePath = requestPath === '/' || isAdminPage ? path.join(PUBLIC_DIR, 'index.html') : path.join(PUBLIC_DIR, requestPath);
+  const isPaymentResultPage = requestPath === '/payment/result' || requestPath === '/payment/result/';
+  const filePath = requestPath === '/' || isAdminPage || isPaymentResultPage ? path.join(PUBLIC_DIR, 'index.html') : path.join(PUBLIC_DIR, requestPath);
   const normalized = path.resolve(filePath);
   const relative = path.relative(PUBLIC_DIR, normalized);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
@@ -4194,7 +5477,10 @@ async function serveStatic(req, res, url) {
     let data = await fs.readFile(normalized);
     if (ext === '.html') {
       const entry = isAdminPage ? 'admin' : 'user';
-      data = Buffer.from(data.toString('utf8').replace(/<body([^>]*)data-entry="[^"]*"/, `<body$1data-entry="${entry}"`), 'utf8');
+      const scriptSrc = entry === 'admin' ? '/app.js?v=20260709-payment-editor-v1' : '/user.js?v=20260709-payment-editor-v1';
+      data = Buffer.from(data.toString('utf8')
+        .replace(/<body([^>]*)data-entry="[^"]*"/, `<body$1data-entry="${entry}"`)
+        .replace(/<script type="module" src="[^"]+"><\/script>/, `<script type="module" src="${scriptSrc}"></script>`), 'utf8');
     }
     res.writeHead(200, securityHeaders({ 'Content-Type': type, 'Cache-Control': 'no-store' }));
     res.end(data);
@@ -4226,7 +5512,7 @@ server.listen(PORT, () => {
   console.log(`十夜管理系统 listening on http://127.0.0.1:${PORT}`);
   console.log(`用户入口：http://127.0.0.1:${PORT}/`);
   console.log(`管理员入口：http://127.0.0.1:${PORT}${adminPath()}`);
-  console.log(`数据存储：${isMysqlStorage() ? 'MySQL' : 'JSON 文件（开发/兼容模式）'}`);
+  console.log('数据存储：MySQL');
   console.log(`Session 存储：${redisClient ? 'Redis' : '内存'}`);
   console.log('默认账号 admin / admin123，公网部署建议在账号安全里修改密码。');
 });
