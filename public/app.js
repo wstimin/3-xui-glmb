@@ -1,6 +1,7 @@
 const app = document.querySelector('#app');
 const entryMode = document.body.dataset.entry || 'user';
-const BUILD_VERSION = '20260708-user-recharge-layout-v4';
+const APP_VERSION = '0.4.3';
+const BUILD_VERSION = '20260710-admin-ui-polish-v3';
 
 if (location.protocol === 'file:') {
   app.innerHTML = `
@@ -52,24 +53,72 @@ const statusText = {
   enabled: '启用'
 };
 
-const adminNavItems = [
-  ['customers', '用户管理', 'U'],
-  ['servers', '3x-ui 节点', 'N'],
-  ['service-nodes', '服务节点', 'V'],
-  ['socks', 'SOCKS 出站', 'S'],
-  ['cards', '卡密管理', 'C'],
-  ['finance', '财务流水', 'F'],
-  ['logs', '同步日志', 'L'],
-  ['settings', '系统设置', 'G'],
-  ['payments', '支付设置', 'P'],
-  ['security', '账号安全', 'A']
+const disabledReasonText = {
+  expired: '已过期自动停用',
+  traffic_exceeded: '流量超限自动停用',
+  remote_disabled: '远端已停用',
+  manual: '手动停用'
+};
+
+function nodeDisabledReasonText(node = {}) {
+  return disabledReasonText[node.disabledReason] || (node.status === 'disabled' ? '已停用' : '');
+}
+
+function nodeCanSelfRenew(node = {}) {
+  return node.status !== 'disabled' || ['expired', 'traffic_exceeded'].includes(String(node.disabledReason || ''));
+}
+
+const adminNavGroups = [
+  {
+    label: '业务',
+    items: [
+      ['customers', '用户管理', 'users'],
+      ['service-nodes', '服务节点', 'network'],
+      ['cards', '卡密管理', 'ticket'],
+      ['finance', '财务流水', 'receipt'],
+      ['payments', '支付设置', 'credit-card']
+    ]
+  },
+  {
+    label: '基础设施',
+    items: [
+      ['servers', '3x-ui 节点', 'server'],
+      ['socks', 'SOCKS 出站', 'route'],
+      ['logs', '同步日志', 'logs']
+    ]
+  },
+  {
+    label: '系统',
+    items: [
+      ['settings', '系统设置', 'settings'],
+      ['security', '账号安全', 'shield']
+    ]
+  }
 ];
 
 const userNavItems = [
-  ['user-home', '充值续费', 'B'],
-  ['user-nodes', '节点管理', 'N'],
-  ['user-profile', '账号资料', 'A']
+  ['user-home', '充值续费', 'wallet'],
+  ['user-nodes', '节点管理', 'server'],
+  ['user-profile', '账号资料', 'user']
 ];
+
+const navIcons = {
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+  user: '<path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/>',
+  server: '<rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>',
+  network: '<rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M12 8v4"/><path d="M5 16v-2a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/>',
+  route: '<circle cx="6" cy="19" r="3"/><path d="M9 19h8a3 3 0 0 0 0-6H7a3 3 0 0 1 0-6h11"/><circle cx="18" cy="5" r="3"/>',
+  ticket: '<path d="M2 9a3 3 0 0 0 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 0 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/>',
+  receipt: '<path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2Z"/><path d="M16 8h-6"/><path d="M16 12h-6"/><path d="M10 16h4"/>',
+  'credit-card': '<rect width="20" height="14" x="2" y="5" rx="2"/><path d="M2 10h20"/><path d="M6 15h2"/><path d="M10 15h4"/>',
+  logs: '<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/>',
+  shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.68 0C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1Z"/><path d="m9 12 2 2 4-4"/>',
+  wallet: '<path d="M19 7V5a2 2 0 0 0-2-2H5a3 3 0 0 0 0 6h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3v1a2 2 0 0 1-2 2H5a3 3 0 0 1-3-3V6"/><path d="M18 14h.01"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>'
+};
 
 function branding() {
   const settings = state.db?.settings || state.branding || {};
@@ -241,6 +290,22 @@ function confirmDialog(title, message, options = {}) {
 
 function promptDialog(title, message, value = '') {
   return openModal({ title, message, input: { value }, confirmText: '保存' });
+}
+
+function setSubmitState(form, loading, text = '保存中...') {
+  const button = form?.querySelector('button[type="submit"]');
+  if (!button) return;
+  if (loading) {
+    button.dataset.originalText = button.textContent;
+    button.textContent = text;
+    button.disabled = true;
+    button.classList.add('loading');
+    return;
+  }
+  button.textContent = button.dataset.originalText || button.textContent;
+  button.disabled = false;
+  button.classList.remove('loading');
+  delete button.dataset.originalText;
 }
 
 async function api(path, options = {}) {
@@ -417,8 +482,46 @@ function render() {
   return renderAdminApp();
 }
 
+function navIcon(icon) {
+  const paths = navIcons[icon] || navIcons.settings;
+  return `<span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${paths}</svg></span>`;
+}
+
+function uiIcon(icon) {
+  const paths = navIcons[icon] || navIcons.settings;
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+
+function iconButton(action, icon, title, extraClass = '') {
+  return `<button class="btn icon ${extraClass}" type="button" data-action="${h(action)}" title="${h(title)}" aria-label="${h(title)}">${uiIcon(icon)}</button>`;
+}
+
 function navButton(view, label, icon, activeView) {
-  return `<button class="${activeView === view ? 'active' : ''}" data-view="${view}" data-icon="${icon}">${label}</button>`;
+  return `<button class="${activeView === view ? 'active' : ''}" data-view="${view}">${navIcon(icon)}<span class="nav-label">${h(label)}</span></button>`;
+}
+
+function renderAdminNav() {
+  return adminNavGroups.map((group) => `
+    <div class="nav-group">
+      <div class="nav-group-label">${h(group.label)}</div>
+      ${group.items.map(([view, label, icon]) => navButton(view, label, icon, state.view)).join('')}
+    </div>
+  `).join('');
+}
+
+function renderUserNav() {
+  return userNavItems.map(([view, label, icon]) => navButton(view, label, icon, state.userView)).join('');
+}
+
+function sidebarAccount(lines = []) {
+  return `<div class="sidebar-footer account-footer"><div class="account-meta">${lines.map((line) => `<span>${line}</span>`).join('')}</div><button class="sidebar-logout" type="button" data-action="logout">${uiIcon('logout')}<span>退出登录</span></button></div>`;
+}
+
+function collapsibleSection({ title, desc = '', count = 0, open = false, body = '' }) {
+  return `<details class="collapse-section" ${open ? 'open' : ''}>
+    <summary><div><strong>${h(title)}</strong>${desc ? `<span>${h(desc)}</span>` : ''}</div><em>${h(count)} 条</em>${uiIcon('chevron')}</summary>
+    <div class="collapse-body">${body}</div>
+  </details>`;
 }
 
 function pageTitle() {
@@ -447,6 +550,10 @@ function stats() {
   };
 }
 
+function summaryCards(items) {
+  return `<section class="page-summary">${items.map((item) => `<div class="summary-card ${item.tone || ''}"><span>${h(item.label)}</span><strong>${h(item.value)}</strong><small>${h(item.detail || '')}</small></div>`).join('')}</section>`;
+}
+
 function renderAdminApp() {
   const s = stats();
   document.title = appTitle('管理系统');
@@ -454,8 +561,8 @@ function renderAdminApp() {
     <section class="app-shell">
       <aside class="sidebar">
         <div class="brand">${brandMark()}<span>${h(appTitle('管理系统'))}</span></div>
-        <nav class="nav">${adminNavItems.map(([view, label, icon]) => navButton(view, label, icon, state.view)).join('')}</nav>
-        <div class="sidebar-footer">登录用户：${h(state.user)}<br>版本：0.4.1<br>数据存储：服务器数据库</div>
+        <nav class="nav">${renderAdminNav()}</nav>
+        ${sidebarAccount([`登录用户：${h(state.user)}`, `版本：${APP_VERSION}`, '数据存储：服务器数据库'])}
       </aside>
       <section class="content">
         <div class="topbar">
@@ -465,9 +572,8 @@ function renderAdminApp() {
             <div class="sub">管理员后台管理用户、卡密、3x-ui 节点和 SOCKS 中转。</div>
           </div>
           <div class="actions">
-            <button class="btn" data-action="disable-expired">停用过期用户</button>
-            <button class="btn" data-action="refresh">刷新</button>
-            <button class="btn danger" data-action="logout">退出</button>
+            ${iconButton('refresh', 'refresh', '刷新数据')}
+            ${iconButton('logout', 'logout', '退出登录', 'mobile-only')}
           </div>
         </div>
         <div class="stats">
@@ -501,23 +607,36 @@ function renderAdminView() {
 
 function renderCustomers() {
   const term = state.search.toLowerCase();
+  const customers = state.db.customers || [];
+  const statusRank = { active: 1, warning: 2, expired: 3, disabled: 4 };
   const rows = (state.db.customers || []).filter((customer) => [
     customer.name,
     customer.contact,
     customer.loginUsername,
     customer.remark,
     ...customerBindings(customer.id).map((binding) => `${binding.name || ''} ${binding.clientEmail || ''}`)
-  ].join(' ').toLowerCase().includes(term));
+  ].join(' ').toLowerCase().includes(term)).sort((left, right) => {
+    const rankDiff = (statusRank[left.computedStatus] || 9) - (statusRank[right.computedStatus] || 9);
+    if (rankDiff) return rankDiff;
+    return String(left.name || '').localeCompare(String(right.name || ''), 'zh-CN');
+  });
+  const boundCustomers = customers.filter((customer) => customerBindings(customer.id).length).length;
+  const totalBalance = customers.reduce((sum, customer) => sum + Number(customer.balance || 0), 0);
 
   return `
-    <div class="toolbar">
-      <div class="toolbar-left"><input class="search" placeholder="搜索用户、登录账号、联系方式、客户端邮箱" value="${h(state.search)}" data-search></div>
-      <div class="toolbar-right"><button class="btn primary" data-action="new-customer">+ 新建用户</button></div>
+    ${summaryCards([
+      { label: '筛选结果', value: `${rows.length} / ${customers.length}`, detail: term ? '当前搜索命中用户' : '当前用户总览', tone: 'primary' },
+      { label: '已绑定节点', value: `${boundCustomers}`, detail: `${Math.max(customers.length - boundCustomers, 0)} 个用户未绑定` },
+      { label: '账户余额', value: `${money(totalBalance)} ${state.db.settings.currency}`, detail: '所有用户余额合计' }
+    ])}
+    <div class="toolbar page-toolbar">
+      <div class="toolbar-left"><input class="search" placeholder="搜索用户、登录账号、联系方式、客户端邮箱" value="${h(state.search)}" data-search><span class="toolbar-meta">${term ? `已筛选 ${rows.length} 条` : `共 ${customers.length} 个用户`}</span></div>
+      <div class="toolbar-right"><button class="btn" data-action="disable-expired">停用过期用户</button><button class="btn primary" data-action="new-customer">新建用户</button></div>
     </div>
-    <section class="panel">
-      <div class="panel-head"><div><h2>用户列表</h2><p>管理员创建用户登录账号，用户端不能自行注册。</p></div></div>
+    <section class="panel data-panel">
+      <div class="panel-head"><div><h2>用户列表</h2><p>默认按可服务用户优先排列，过期和停用用户保留在列表后方。</p></div><div class="panel-tools">${iconButton('refresh', 'refresh', '刷新用户列表', 'small-icon')}</div></div>
       <table><thead><tr>
-        <th style="width:170px">用户</th><th style="width:126px">登录账号</th><th style="width:110px">余额</th><th style="width:150px">绑定节点</th><th style="width:180px">最近到期</th><th style="width:88px">状态</th><th style="width:420px">操作</th>
+        <th style="width:180px">用户</th><th style="width:136px">登录账号</th><th style="width:110px">余额</th><th style="width:170px">绑定节点</th><th style="width:168px">最近到期</th><th style="width:88px">状态</th><th style="width:390px">操作</th>
       </tr></thead><tbody>${rows.length ? rows.map(customerRow).join('') : `<tr><td colspan="7" class="empty">还没有用户，点击右上角新建用户。</td></tr>`}</tbody></table>
     </section>`;
 }
@@ -533,9 +652,9 @@ function customerRow(customer) {
     <td>${earliest ? fmtDate(earliest.expireAt) : '-'}</td>
     <td><span class="status ${customer.computedStatus}">${statusText[customer.computedStatus] || customer.computedStatus}</span></td>
     <td><div class="row-actions">
-      <button class="btn small primary" data-action="bind-customer-node" data-id="${customer.id}">绑定节点</button>
-      <button class="btn small" data-action="manage-customer-nodes" data-id="${customer.id}">节点管理</button>
-      <button class="btn small" data-action="adjust-balance" data-id="${customer.id}">调余额</button>
+      <button class="btn small primary" data-action="bind-customer-node" data-id="${customer.id}">绑定</button>
+      <button class="btn small" data-action="manage-customer-nodes" data-id="${customer.id}">节点</button>
+      <button class="btn small" data-action="adjust-balance" data-id="${customer.id}">余额</button>
       <button class="btn small" data-action="sync" data-id="${customer.id}">同步</button>
       <button class="btn small" data-action="edit-customer" data-id="${customer.id}">编辑</button>
       <button class="btn small" data-action="toggle" data-id="${customer.id}">${customer.status === 'disabled' ? '启用' : '停用'}</button>
@@ -588,21 +707,20 @@ function renderFinance() {
   const balanceLogs = state.db.balanceLogs || [];
   const renewalLogs = state.db.renewalLogs || [];
   const rechargeOrders = state.db.rechargeOrders || [];
+  const rechargeTable = `<table><thead><tr><th style="width:160px">创建时间</th><th style="width:150px">用户</th><th style="width:120px">支付平台</th><th style="width:110px">支付方式</th><th style="width:110px">金额</th><th style="width:90px">状态</th><th style="width:190px">本站订单号</th><th>通道订单号</th></tr></thead>
+    <tbody>${rechargeOrders.length ? rechargeOrders.map((order) => `<tr><td>${fmtDate(order.createdAt)}</td><td>${h(order.customerName || order.customerId || '-')}</td><td>${h(paymentProviderText(order.provider))}</td><td>${h(paymentMethodText(order.method))}</td><td>${money(order.amount)} ${h(state.db.settings.currency)}</td><td><span class="status ${order.status === 'paid' ? 'success' : order.status === 'failed' ? 'failed' : 'warning'}">${statusText[order.status] || order.status || '-'}</span></td><td class="mono">${h(order.tradeNo || '-')}</td><td class="mono">${h(order.channelTradeNo || '-')}</td></tr>`).join('') : `<tr><td colspan="8" class="empty">还没有在线充值订单。</td></tr>`}</tbody></table>`;
+  const balanceTable = `<table><thead><tr><th style="width:160px">时间</th><th style="width:150px">用户</th><th style="width:110px">类型</th><th style="width:110px">变动</th><th style="width:190px">余额变化</th><th style="width:120px">操作人</th><th>备注</th></tr></thead>
+    <tbody>${balanceLogs.length ? balanceLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(log.customerName || log.customerId || '-')}</td><td>${h(balanceTypeText(log.type))}</td><td class="mono ${Number(log.amount || 0) < 0 ? 'danger-text' : 'success-text'}">${Number(log.amount || 0) > 0 ? '+' : ''}${money(log.amount)}</td><td class="mono">${money(log.beforeBalance)} → ${money(log.afterBalance)}</td><td>${h(log.operator || '-')}</td><td>${h(log.remark || '-')}</td></tr>`).join('') : `<tr><td colspan="7" class="empty">还没有余额流水。</td></tr>`}</tbody></table>`;
+  const renewalTable = `<table><thead><tr><th style="width:160px">时间</th><th style="width:150px">用户</th><th style="width:90px">来源</th><th style="width:80px">月数</th><th style="width:110px">金额</th><th style="width:250px">到期变化</th><th style="width:90px">状态</th><th>说明</th></tr></thead>
+    <tbody>${renewalLogs.length ? renewalLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(log.customerName || log.customerId || '-')}</td><td>${h(renewalSourceText(log.source))}</td><td>${h(log.months || 1)}</td><td>${money(log.price)} ${h(state.db.settings.currency)}</td><td>${fmtDate(log.beforeExpireAt)} → ${fmtDate(log.afterExpireAt)}</td><td><span class="status ${log.status === 'warning' ? 'warning' : log.status === 'success' ? 'success' : 'active'}">${statusText[log.status] || log.status || '-'}</span></td><td>${h(log.message || '-')}</td></tr>`).join('') : `<tr><td colspan="8" class="empty">还没有续费记录。</td></tr>`}</tbody></table>`;
   return `
-    <section class="panel">
-      <div class="panel-head"><div><h2>在线充值订单</h2><p>记录支付宝、易支付、微信、PayPal 和 USDT 通道创建的充值订单。</p></div></div>
-      <table><thead><tr><th style="width:160px">创建时间</th><th style="width:150px">用户</th><th style="width:120px">支付平台</th><th style="width:110px">支付方式</th><th style="width:110px">金额</th><th style="width:90px">状态</th><th style="width:190px">本站订单号</th><th>通道订单号</th></tr></thead>
-      <tbody>${rechargeOrders.length ? rechargeOrders.map((order) => `<tr><td>${fmtDate(order.createdAt)}</td><td>${h(order.customerName || order.customerId || '-')}</td><td>${h(paymentProviderText(order.provider))}</td><td>${h(paymentMethodText(order.method))}</td><td>${money(order.amount)} ${h(state.db.settings.currency)}</td><td><span class="status ${order.status === 'paid' ? 'success' : order.status === 'failed' ? 'failed' : 'warning'}">${statusText[order.status] || order.status || '-'}</span></td><td class="mono">${h(order.tradeNo || '-')}</td><td class="mono">${h(order.channelTradeNo || '-')}</td></tr>`).join('') : `<tr><td colspan="8" class="empty">还没有在线充值订单。</td></tr>`}</tbody></table>
-    </section>
-    <section class="panel">
-      <div class="panel-head"><div><h2>余额流水</h2><p>记录卡密充值、用户续费扣款和管理员手动调整余额。</p></div></div>
-      <table><thead><tr><th style="width:160px">时间</th><th style="width:150px">用户</th><th style="width:110px">类型</th><th style="width:110px">变动</th><th style="width:190px">余额变化</th><th style="width:120px">操作人</th><th>备注</th></tr></thead>
-      <tbody>${balanceLogs.length ? balanceLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(log.customerName || log.customerId || '-')}</td><td>${h(balanceTypeText(log.type))}</td><td class="mono ${Number(log.amount || 0) < 0 ? 'danger-text' : 'success-text'}">${Number(log.amount || 0) > 0 ? '+' : ''}${money(log.amount)}</td><td class="mono">${money(log.beforeBalance)} → ${money(log.afterBalance)}</td><td>${h(log.operator || '-')}</td><td>${h(log.remark || '-')}</td></tr>`).join('') : `<tr><td colspan="7" class="empty">还没有余额流水。</td></tr>`}</tbody></table>
-    </section>
-    <section class="panel">
-      <div class="panel-head"><div><h2>续费记录</h2><p>记录用户自助续费和管理员后台续费，便于对账。</p></div></div>
-      <table><thead><tr><th style="width:160px">时间</th><th style="width:150px">用户</th><th style="width:90px">来源</th><th style="width:80px">月数</th><th style="width:110px">金额</th><th style="width:250px">到期变化</th><th style="width:90px">状态</th><th>说明</th></tr></thead>
-      <tbody>${renewalLogs.length ? renewalLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(log.customerName || log.customerId || '-')}</td><td>${h(renewalSourceText(log.source))}</td><td>${h(log.months || 1)}</td><td>${money(log.price)} ${h(state.db.settings.currency)}</td><td>${fmtDate(log.beforeExpireAt)} → ${fmtDate(log.afterExpireAt)}</td><td><span class="status ${log.status === 'warning' ? 'warning' : log.status === 'success' ? 'success' : 'active'}">${statusText[log.status] || log.status || '-'}</span></td><td>${h(log.message || '-')}</td></tr>`).join('') : `<tr><td colspan="8" class="empty">还没有续费记录。</td></tr>`}</tbody></table>
+    <section class="panel finance-panel">
+      <div class="panel-head"><div><h2>财务流水</h2><p>订单、余额和续费记录按分组折叠，记录多的时候更容易定位。</p></div><div class="panel-tools">${iconButton('refresh', 'refresh', '刷新财务流水', 'small-icon')}</div></div>
+      <div class="collapse-stack">
+        ${collapsibleSection({ title: '在线充值订单', desc: '支付通道创建和回调结果', count: rechargeOrders.length, open: true, body: rechargeTable })}
+        ${collapsibleSection({ title: '余额流水', desc: '卡密、充值、续费和后台调整', count: balanceLogs.length, body: balanceTable })}
+        ${collapsibleSection({ title: '续费记录', desc: '用户自助续费和管理员续费', count: renewalLogs.length, body: renewalTable })}
+      </div>
     </section>`;
 }
 
@@ -650,7 +768,7 @@ function renderCards() {
   return `
     <div class="toolbar">
       <div class="toolbar-left"><span class="muted">未使用 ${unused} 张，已使用 ${used} 张</span></div>
-      <div class="toolbar-right"><button class="btn primary" data-action="generate-cards">+ 生成卡密</button></div>
+      <div class="toolbar-right"><button class="btn primary" data-action="generate-cards">生成卡密</button></div>
     </div>
     ${renderCardGroups()}
     <section class="panel">
@@ -677,7 +795,7 @@ function cardRow(card) {
 
 function renderServers() {
   return `
-    <div class="toolbar"><div class="toolbar-left"></div><div class="toolbar-right"><button class="btn primary" data-action="new-server">+ 添加 3x-ui 节点</button></div></div>
+    <div class="toolbar"><div class="toolbar-left"></div><div class="toolbar-right"><button class="btn primary" data-action="new-server">添加 3x-ui 节点</button></div></div>
     <section class="panel">
       <div class="panel-head"><div><h2>3x-ui 节点</h2><p>保存中心面板或远程节点连接信息，用于用户同步。</p></div></div>
       <table><thead><tr><th style="width:190px">名称</th><th>地址</th><th style="width:110px">基础路径</th><th style="width:160px">账号 / API</th><th style="width:90px">状态</th><th style="width:320px">操作</th></tr></thead>
@@ -697,12 +815,21 @@ function serverRow(server) {
 }
 
 function renderServiceNodes() {
+  const nodes = state.db.serviceNodes || [];
+  const enabled = nodes.filter((node) => node.status !== 'disabled').length;
+  const bound = (state.db.customerNodes || []).length;
+  const panels = state.db.xuiServers || [];
   return `
-    <div class="toolbar"><div class="toolbar-left"></div><div class="toolbar-right"><button class="btn primary" data-action="new-service-node">+ 添加服务节点</button></div></div>
-    <section class="panel">
-      <div class="panel-head"><div><h2>服务节点</h2><p>配置可绑定给用户的节点模板。一个面板服务器可以创建多个服务节点。</p></div></div>
+    ${summaryCards([
+      { label: '服务节点', value: nodes.length, detail: `${enabled} 个正在启用`, tone: 'primary' },
+      { label: '用户绑定', value: bound, detail: '当前所有用户节点绑定' },
+      { label: '面板节点', value: panels.length, detail: panels.length ? '可作为服务节点来源' : '请先添加 3x-ui 节点' }
+    ])}
+    <div class="toolbar page-toolbar"><div class="toolbar-left"><span class="toolbar-meta">服务节点决定用户端可购买和续费的套餐。</span></div><div class="toolbar-right"><button class="btn primary" data-action="new-service-node">添加服务节点</button></div></div>
+    <section class="panel data-panel">
+      <div class="panel-head"><div><h2>服务节点</h2><p>配置可绑定给用户的节点模板。一个面板服务器可以创建多个服务节点。</p></div><div class="panel-tools"><button class="btn small" data-view="servers">管理面板节点</button></div></div>
       <table><thead><tr><th style="width:190px">节点名称</th><th style="width:160px">所属面板</th><th style="width:120px">入站</th><th style="width:120px">价格</th><th style="width:100px">流量</th><th style="width:120px">绑定用户</th><th style="width:90px">状态</th><th style="width:210px">操作</th></tr></thead>
-      <tbody>${(state.db.serviceNodes || []).length ? state.db.serviceNodes.map(serviceNodeRow).join('') : `<tr><td colspan="8" class="empty">还没有服务节点。先添加面板节点，再创建服务节点。</td></tr>`}</tbody></table>
+      <tbody>${nodes.length ? nodes.map(serviceNodeRow).join('') : `<tr><td colspan="8" class="empty">还没有服务节点。先添加面板节点，再创建服务节点。</td></tr>`}</tbody></table>
     </section>`;
 }
 
@@ -711,11 +838,11 @@ function serviceNodeRow(node) {
   const count = (state.db.customerNodes || []).filter((item) => item.nodeId === node.id).length;
   return `<tr>
     <td class="main-cell"><strong>${h(node.name)}</strong><div class="muted">${h(node.remark || '无备注')}</div></td>
-    <td>${h(server?.name || '-')}</td>
+    <td>${h(server?.name || '-')}<div class="muted">${server ? `${h(server.protocol)}://${h(server.host)}` : '面板未找到'}</div></td>
     <td>${node.autoCreateInbound ? '自动创建' : `ID ${h(node.inboundId || '-')}`}<div class="muted">${h(node.inboundTemplate || 'vless-tcp')}</div></td>
     <td>${money(node.amount)} ${h(state.db.settings.currency)}<div class="muted">每月</div></td>
     <td>${h(node.trafficLimitGb || 0)} GB</td>
-    <td>${count}</td>
+    <td><strong>${count}</strong><div class="muted">绑定用户</div></td>
     <td><span class="status ${node.status === 'enabled' ? 'active' : 'disabled'}">${node.status === 'enabled' ? '启用' : '停用'}</span></td>
     <td><div class="row-actions"><button class="btn small" data-action="edit-service-node" data-id="${node.id}">编辑</button><button class="btn small danger" data-action="delete-service-node" data-id="${node.id}">删除</button></div></td>
   </tr>`;
@@ -723,7 +850,7 @@ function serviceNodeRow(node) {
 
 function renderSocks() {
   return `
-    <div class="toolbar"><div class="toolbar-left"></div><div class="toolbar-right"><button class="btn primary" data-action="new-socks">+ 添加 SOCKS 出站</button></div></div>
+    <div class="toolbar"><div class="toolbar-left"></div><div class="toolbar-right"><button class="btn primary" data-action="new-socks">添加 SOCKS 出站</button></div></div>
     <section class="panel">
       <div class="panel-head"><div><h2>SOCKS 出站</h2><p>维护可复用的 SOCKS 中转，用户资料里可以绑定。</p></div></div>
       <table><thead><tr><th style="width:190px">名称</th><th>地址</th><th style="width:130px">认证</th><th style="width:150px">标识</th><th style="width:100px">绑定用户</th><th style="width:90px">状态</th><th style="width:210px">操作</th></tr></thead>
@@ -795,116 +922,6 @@ function renderSystemSettings() {
   </section>`;
 }
 
-function renderPaymentSettingsLegacy() {
-  return renderPaymentSettings();
-  const pay = state.db.settings?.payments || {};
-  const epay = pay.epay || { methods: {} };
-  const epayTypes = epay.types || {};
-  const alipay = pay.alipay || { methods: {} };
-  const alipayMethods = alipay.methods || {};
-  const bepusdt = pay.bepusdt || {};
-  const wechat = pay.wechat || {};
-  return `<section class="panel settings-panel">
-    <div class="panel-head"><div><h2>支付设置</h2><p>选择启用的收款方式，只填写对应渠道需要的参数。</p></div></div>
-    <form class="panel-body settings-form" data-settings-form="payments">
-      <input type="hidden" name="paymentSettingsSubmitted" value="1">
-      ${renderSection('基础支付配置', `
-        <div class="grid-3"><div class="field"><label>在线支付总开关</label><label class="check-row"><input name="paymentsEnabled" type="checkbox" ${pay.enabled ? 'checked' : ''}> 启用在线充值</label></div><div class="field"><label>最低充值金额</label><input name="paymentMinAmount" type="number" min="0.01" step="0.01" value="${h(pay.minAmount || 1)}"></div><div class="field"><label>快捷金额</label><input name="paymentAmounts" value="${h((pay.amounts || [10, 30, 50, 100]).join(','))}" placeholder="10,30,50,100"></div></div>
-        <div class="field"><label>公网访问地址</label><input name="paymentSiteUrl" value="${h(pay.siteUrl || '')}" placeholder="https://你的域名.com"></div>
-        <div class="form-note">如果下方回调地址或跳转地址留空，系统会用这里的公网地址自动生成。支付平台必须能访问这个域名。</div>
-      `)}
-      <div class="payment-provider-grid">
-        <section class="payment-provider" data-payment-section="alipay">
-          <div class="payment-provider-head"><div><h3>支付宝开放平台直连</h3><p>按支付宝官方接口接入，可按需启用不同支付产品。</p></div><label class="check-row"><input name="alipayEnabled" type="checkbox" data-payment-toggle="alipay" ${alipay.enabled ? 'checked' : ''}> 启用</label></div>
-          <div class="payment-provider-fields" data-payment-fields="alipay">
-            <div class="grid-2"><div class="field"><label>支付宝网关地址</label><input name="alipayGateway" value="${h(alipay.gateway || 'https://openapi.alipay.com/gateway.do')}"></div><div class="field"><label>应用 App ID</label><input name="alipayAppId" value="${h(alipay.appId || '')}"></div></div>
-            <div class="grid-2"><div class="field"><label>异步回调地址</label><input name="alipayNotifyUrl" value="${h(alipay.notifyUrl || '')}" placeholder="https://你的域名.com/api/payments/alipay/notify"></div><div class="field"><label>支付后跳转地址</label><input name="alipayReturnUrl" value="${h(alipay.returnUrl || '')}" placeholder="https://你的域名.com/payment/result?trade_no={trade_no}"></div></div>
-            <div class="field"><label>启用产品</label><div class="mini-checks"><label><input name="alipayMethodPage" type="checkbox" ${alipayMethods.page !== false ? 'checked' : ''}> 电脑网站支付</label><label><input name="alipayMethodWap" type="checkbox" ${alipayMethods.wap ? 'checked' : ''}> 手机网站/H5</label><label><input name="alipayMethodPrecreate" type="checkbox" ${alipayMethods.precreate ? 'checked' : ''}> 当面付扫码</label></div></div>
-            <div class="form-note">生产环境默认使用支付宝正式网关 https://openapi.alipay.com/gateway.do。当前直连实现包含电脑网站支付 alipay.trade.page.pay、手机网站/H5 alipay.trade.wap.pay、当面付扫码 alipay.trade.precreate；请确保你的支付宝应用已经开通对应产品。</div>
-            <div class="field"><label>应用私钥</label><textarea name="alipayAppPrivateKey">${h(alipay.appPrivateKey || '')}</textarea></div>
-            <div class="field"><label>支付宝公钥</label><textarea name="alipayPublicKey">${h(alipay.alipayPublicKey || '')}</textarea></div>
-          </div>
-        </section>
-        <section class="payment-provider" data-payment-section="epay">
-          <div class="payment-provider-head"><div><h3>彩虹易支付</h3><p>聚合支付宝、微信、PayPal 和 USDT 渠道。</p></div><label class="check-row"><input name="epayEnabled" type="checkbox" data-payment-toggle="epay" ${epay.enabled ? 'checked' : ''}> 启用</label></div>
-          <div class="payment-provider-fields" data-payment-fields="epay">
-            <div class="grid-3"><div class="field"><label>支付网关地址</label><input name="epayGateway" value="${h(epay.gateway || '')}" placeholder="https://pay.example.com"></div><div class="field"><label>商户 PID</label><input name="epayPid" value="${h(epay.pid || '')}"></div><div class="field"><label>签名方式</label><select name="epaySignType"><option value="MD5" ${epay.signType !== 'RSA' ? 'selected' : ''}>MD5</option><option value="RSA" ${epay.signType === 'RSA' ? 'selected' : ''}>RSA</option></select></div></div>
-            <div class="grid-2"><div class="field"><label>异步回调地址</label><input name="epayNotifyUrl" value="${h(epay.notifyUrl || '')}" placeholder="https://你的域名.com/api/payments/epay/notify"></div><div class="field"><label>支付后跳转地址</label><input name="epayReturnUrl" value="${h(epay.returnUrl || '')}" placeholder="https://你的域名.com/payment/result?trade_no={trade_no}"></div></div>
-            <div class="grid-3"><div class="field"><label>商户密钥</label><input name="epayMerchantKey" type="password" value="${h(epay.merchantKey || '')}"></div><div class="field"><label>RSA 公钥</label><input name="epayPublicKey" type="password" value="${h(epay.publicKey || '')}"></div><div class="field"><label>启用通道</label><div class="mini-checks"><label><input name="epayMethodAlipay" type="checkbox" ${epay.methods?.alipay ? 'checked' : ''}> 支付宝</label><label><input name="epayMethodWxpay" type="checkbox" ${epay.methods?.wxpay ? 'checked' : ''}> 微信</label><label><input name="epayMethodPaypal" type="checkbox" ${epay.methods?.paypal ? 'checked' : ''}> PayPal</label><label><input name="epayMethodUsdt" type="checkbox" ${epay.methods?.usdt ? 'checked' : ''}> USDT-TRC20</label></div></div></div>
-            <div class="grid-4"><div class="field"><label>支付宝 type</label><input name="epayTypeAlipay" value="${h(epayTypes.alipay || 'alipay')}"></div><div class="field"><label>微信 type</label><input name="epayTypeWxpay" value="${h(epayTypes.wxpay || 'wxpay')}"></div><div class="field"><label>PayPal type</label><input name="epayTypePaypal" value="${h(epayTypes.paypal || 'paypal')}"></div><div class="field"><label>USDT type</label><input name="epayTypeUsdt" value="${h(epayTypes.usdt || 'usdt.trc20')}"></div></div>
-            <div class="form-note">这些 type 必须和支付系统后台“支付方式”的名称一致。BEpusdt 默认使用 usdt.trc20；如果你的支付系统里名称不同，可以在这里改。</div>
-            <div class="field"><label>RSA 私钥</label><textarea name="epayPrivateKey">${h(epay.privateKey || '')}</textarea></div>
-          </div>
-        </section>
-      </div>
-      <div class="form-actions"><button class="btn primary" type="submit">保存支付设置</button></div>
-    </form>
-  </section>`;
-}
-
-function renderPaymentSettingsOldSwitcher() {
-  const pay = state.db.settings?.payments || {};
-  const epay = pay.epay || { methods: {}, types: {} };
-  const epayTypes = epay.types || {};
-  const alipay = pay.alipay || { methods: {} };
-  const alipayMethods = alipay.methods || {};
-  const bepusdt = pay.bepusdt || {};
-  const wechat = pay.wechat || {};
-  return `<section class="panel settings-panel">
-    <div class="panel-head"><div><h2>支付设置</h2><p>选择一个接口后只显示对应配置，避免所有表单堆在一起。</p></div></div>
-    <form class="panel-body settings-form" data-settings-form="payments" data-active-payment="">
-      <input type="hidden" name="paymentSettingsSubmitted" value="1">
-      ${renderSection('基础支付配置', `
-        <div class="grid-3"><div class="field"><label>在线支付总开关</label><label class="check-row"><input name="paymentsEnabled" type="checkbox" ${pay.enabled ? 'checked' : ''}> 启用在线充值</label></div><div class="field"><label>最低充值金额</label><input name="paymentMinAmount" type="number" min="0.01" step="0.01" value="${h(pay.minAmount || 1)}"></div><div class="field"><label>快捷金额</label><input name="paymentAmounts" value="${h((pay.amounts || [10, 30, 50, 100]).join(','))}" placeholder="10,30,50,100"></div></div>
-        <div class="field"><label>公网访问地址</label><input name="paymentSiteUrl" value="${h(pay.siteUrl || '')}" placeholder="https://你的域名.com"></div>
-        <div class="form-note">回调地址或跳转地址留空时，系统会用公网访问地址自动生成。支付平台必须能访问这个域名。</div>
-      `)}
-      <div class="payment-provider-grid payment-provider-switcher">
-        <section class="payment-provider" data-payment-section="alipay">
-          <div class="payment-provider-head"><button class="payment-provider-select" type="button" data-payment-select="alipay"><span><h3>支付宝开放平台直连</h3><p>电脑网站、H5、当面付扫码。</p></span></button><label class="check-row"><input name="alipayEnabled" type="checkbox" data-payment-toggle="alipay" ${alipay.enabled ? 'checked' : ''}> 启用</label></div>
-          <div class="payment-provider-fields" data-payment-fields="alipay">
-            <div class="grid-2"><div class="field"><label>支付宝网关地址</label><input name="alipayGateway" value="${h(alipay.gateway || 'https://openapi.alipay.com/gateway.do')}"></div><div class="field"><label>应用 App ID</label><input name="alipayAppId" value="${h(alipay.appId || '')}"></div></div>
-            <div class="grid-2"><div class="field"><label>异步回调地址</label><input name="alipayNotifyUrl" value="${h(alipay.notifyUrl || '')}" placeholder="https://你的域名.com/api/payments/alipay/notify"></div><div class="field"><label>支付后跳转地址</label><input name="alipayReturnUrl" value="${h(alipay.returnUrl || '')}" placeholder="https://你的域名.com/payment/result?trade_no={trade_no}"></div></div>
-            <div class="field"><label>启用产品</label><div class="mini-checks"><label><input name="alipayMethodPage" type="checkbox" ${alipayMethods.page !== false ? 'checked' : ''}> 电脑网站支付</label><label><input name="alipayMethodWap" type="checkbox" ${alipayMethods.wap ? 'checked' : ''}> 手机网站/H5</label><label><input name="alipayMethodPrecreate" type="checkbox" ${alipayMethods.precreate ? 'checked' : ''}> 当面付扫码</label></div></div>
-            <div class="field"><label>应用私钥</label><textarea name="alipayAppPrivateKey">${h(alipay.appPrivateKey || '')}</textarea></div>
-            <div class="field"><label>支付宝公钥</label><textarea name="alipayPublicKey">${h(alipay.alipayPublicKey || '')}</textarea></div>
-          </div>
-        </section>
-        <section class="payment-provider" data-payment-section="epay">
-          <div class="payment-provider-head"><button class="payment-provider-select" type="button" data-payment-select="epay"><span><h3>彩虹易支付</h3><p>聚合支付宝、微信、PayPal 和 USDT。</p></span></button><label class="check-row"><input name="epayEnabled" type="checkbox" data-payment-toggle="epay" ${epay.enabled ? 'checked' : ''}> 启用</label></div>
-          <div class="payment-provider-fields" data-payment-fields="epay">
-            <div class="grid-3"><div class="field"><label>支付网关地址</label><input name="epayGateway" value="${h(epay.gateway || '')}" placeholder="https://pay.example.com"></div><div class="field"><label>商户 PID</label><input name="epayPid" value="${h(epay.pid || '')}"></div><div class="field"><label>签名方式</label><select name="epaySignType"><option value="MD5" ${epay.signType !== 'RSA' ? 'selected' : ''}>MD5</option><option value="RSA" ${epay.signType === 'RSA' ? 'selected' : ''}>RSA</option></select></div></div>
-            <div class="grid-2"><div class="field"><label>异步回调地址</label><input name="epayNotifyUrl" value="${h(epay.notifyUrl || '')}" placeholder="https://你的域名.com/api/payments/epay/notify"></div><div class="field"><label>支付后跳转地址</label><input name="epayReturnUrl" value="${h(epay.returnUrl || '')}" placeholder="https://你的域名.com/payment/result?trade_no={trade_no}"></div></div>
-            <div class="grid-3"><div class="field"><label>商户密钥</label><input name="epayMerchantKey" type="password" value="${h(epay.merchantKey || '')}"></div><div class="field"><label>RSA 公钥</label><input name="epayPublicKey" type="password" value="${h(epay.publicKey || '')}"></div><div class="field"><label>启用通道</label><div class="mini-checks"><label><input name="epayMethodAlipay" type="checkbox" ${epay.methods?.alipay ? 'checked' : ''}> 支付宝</label><label><input name="epayMethodWxpay" type="checkbox" ${epay.methods?.wxpay ? 'checked' : ''}> 微信</label><label><input name="epayMethodPaypal" type="checkbox" ${epay.methods?.paypal ? 'checked' : ''}> PayPal</label><label><input name="epayMethodUsdt" type="checkbox" ${epay.methods?.usdt ? 'checked' : ''}> USDT-TRC20</label></div></div></div>
-            <div class="grid-4"><div class="field"><label>支付宝 type</label><input name="epayTypeAlipay" value="${h(epayTypes.alipay || 'alipay')}"></div><div class="field"><label>微信 type</label><input name="epayTypeWxpay" value="${h(epayTypes.wxpay || 'wxpay')}"></div><div class="field"><label>PayPal type</label><input name="epayTypePaypal" value="${h(epayTypes.paypal || 'paypal')}"></div><div class="field"><label>USDT type</label><input name="epayTypeUsdt" value="${h(epayTypes.usdt || 'usdt.trc20')}"></div></div>
-            <div class="field"><label>RSA 私钥</label><textarea name="epayPrivateKey">${h(epay.privateKey || '')}</textarea></div>
-          </div>
-        </section>
-        <section class="payment-provider" data-payment-section="bepusdt">
-          <div class="payment-provider-head"><button class="payment-provider-select" type="button" data-payment-select="bepusdt"><span><h3>BEpusdt 管理面板网关</h3><p>对接你自己的 BEpusdt 面板，使用应用 URI 和对接令牌发起 submit.php 收单。</p></span></button><label class="check-row"><input name="bepusdtEnabled" type="checkbox" data-payment-toggle="bepusdt" ${bepusdt.enabled ? 'checked' : ''}> 启用</label></div>
-          <div class="payment-provider-fields" data-payment-fields="bepusdt">
-            <div class="grid-2"><div class="field"><label>BEpusdt 应用 URI</label><input name="bepusdtAppUrl" value="${h(bepusdt.appUrl || '')}" placeholder="填写你的 BEpusdt 应用 URI"></div><div class="field"><label>对接令牌 Token / KEY</label><input name="bepusdtToken" type="password" value="${h(bepusdt.token || '')}"></div></div>
-            <div class="field"><label>支付类型 type</label><input name="bepusdtTradeType" value="${h(bepusdt.tradeType || 'usdt.trc20')}" placeholder="usdt.trc20"></div>
-            <div class="form-note">这里对接的是你自己的 BEpusdt 管理面板。系统会请求你的应用 URI 下的 submit.php，PID 固定为 1000，签名 KEY 使用对接令牌；钱包、静态资源和链上收款由 BEpusdt 面板自己管理。</div>
-            <div class="grid-2"><div class="field"><label>异步回调地址</label><input name="bepusdtNotifyUrl" value="${h(bepusdt.notifyUrl || '')}" placeholder="https://你的域名.com/api/payments/bepusdt/notify"></div><div class="field"><label>支付后跳转地址</label><input name="bepusdtReturnUrl" value="${h(bepusdt.returnUrl || '')}" placeholder="https://你的域名.com/payment/result?trade_no={trade_no}"></div></div>
-          </div>
-        </section>
-        <section class="payment-provider" data-payment-section="wechat">
-          <div class="payment-provider-head"><button class="payment-provider-select" type="button" data-payment-select="wechat"><span><h3>微信官方支付 V3 Native</h3><p>贴合易支付 wxpayn：appid、appmchid、appsecret、appkey、publickeyid。</p></span></button><label class="check-row"><input name="wechatEnabled" type="checkbox" data-payment-toggle="wechat" ${wechat.enabled ? 'checked' : ''}> 启用</label></div>
-          <div class="payment-provider-fields" data-payment-fields="wechat">
-            <div class="grid-2"><div class="field"><label>服务号/小程序/开放平台 AppID</label><input name="wechatAppId" value="${h(wechat.appId || '')}"></div><div class="field"><label>商户号 appmchid</label><input name="wechatMchId" value="${h(wechat.mchId || '')}"></div></div>
-            <div class="grid-3"><div class="field"><label>商户 APIv3 密钥 appsecret</label><input name="wechatApiV3Key" type="password" value="${h(wechat.apiV3Key || '')}" placeholder="32 位 APIv3 Key"></div><div class="field"><label>商户 API 证书序列号 appkey</label><input name="wechatMerchantSerialNo" value="${h(wechat.merchantSerialNo || wechat.serialNo || '')}"></div><div class="field"><label>微信支付公钥 ID publickeyid</label><input name="wechatPlatformSerialNo" value="${h(wechat.platformSerialNo || '')}" placeholder="平台证书模式可留空"></div></div>
-            <div class="field"><label>商户 API 私钥 apiclient_key.pem</label><textarea name="wechatMerchantPrivateKey" placeholder="-----BEGIN PRIVATE KEY-----">${h(wechat.merchantPrivateKey || wechat.privateKey || '')}</textarea></div>
-            <div class="field"><label>微信支付平台公钥 pub_key.pem</label><textarea name="wechatPlatformPublicKey" placeholder="-----BEGIN PUBLIC KEY-----">${h(wechat.platformPublicKey || '')}</textarea></div>
-            <div class="grid-2"><div class="field"><label>异步回调地址</label><input name="wechatNotifyUrl" value="${h(wechat.notifyUrl || '')}" placeholder="https://你的域名.com/api/payments/wechat/notify"></div><div class="field"><label>商品描述</label><input name="wechatDescription" value="${h(wechat.description || 'Account balance recharge')}"></div></div>
-          </div>
-        </section>
-      </div>
-      <div class="form-actions"><button class="btn primary" type="submit">保存支付设置</button></div>
-    </form>
-  </section>`;
-}
-
 function renderPaymentSettings() {
   const pay = state.db.settings?.payments || {};
   const epay = pay.epay || { methods: {}, types: {} };
@@ -915,38 +932,66 @@ function renderPaymentSettings() {
   const wechat = pay.wechat || { methods: {} };
   const wechatMethods = wechat.methods || {};
   const providerNames = { alipay: '支付宝', wechat: '微信支付', epay: '易支付', bepusdt: 'BEpusdt' };
+  const hasValue = (value) => String(value || '').trim() !== '';
+  const hasSecret = (value) => hasValue(value);
+  const providerConfigured = {
+    alipay: hasValue(alipay.appId) || hasSecret(alipay.appPrivateKey) || hasSecret(alipay.alipayPublicKey),
+    wechat: hasValue(wechat.appId) || hasValue(wechat.mchId) || hasSecret(wechat.apiV3Key) || hasSecret(wechat.merchantPrivateKey) || hasSecret(wechat.platformPublicKey),
+    epay: hasValue(epay.gateway) || hasValue(epay.pid) || hasSecret(epay.merchantKey) || hasSecret(epay.privateKey) || hasSecret(epay.publicKey),
+    bepusdt: hasValue(bepusdt.appUrl) || hasSecret(bepusdt.token)
+  };
   const methodRows = [
-    { provider: 'alipay', name: '支付宝电脑网站', desc: '电脑浏览器优先使用', enabled: Boolean(alipay.enabled && alipayMethods.page !== false) },
-    { provider: 'alipay', name: '支付宝 H5', desc: '手机浏览器优先使用', enabled: Boolean(alipay.enabled && alipayMethods.wap) },
-    { provider: 'alipay', name: '支付宝当面付', desc: '生成二维码扫码支付', enabled: Boolean(alipay.enabled && alipayMethods.precreate) },
-    { provider: 'wechat', name: '微信扫码', desc: '生成二维码扫码支付', enabled: Boolean(wechat.enabled && wechatMethods.native !== false) },
-    { provider: 'wechat', name: '微信 H5', desc: '手机浏览器拉起微信支付', enabled: Boolean(wechat.enabled && wechatMethods.h5) },
-    { provider: 'epay', name: '易支付支付宝', desc: '支付宝备用聚合通道', enabled: Boolean(epay.enabled && epay.methods?.alipay) },
-    { provider: 'epay', name: '易支付微信', desc: '微信备用聚合通道', enabled: Boolean(epay.enabled && epay.methods?.wxpay) },
-    { provider: 'epay', name: '易支付 PayPal', desc: 'PayPal 聚合通道', enabled: Boolean(epay.enabled && epay.methods?.paypal) },
-    { provider: 'epay', name: '易支付 USDT', desc: 'USDT 备用聚合通道', enabled: Boolean(epay.enabled && epay.methods?.usdt) },
-    { provider: 'bepusdt', name: 'BEpusdt USDT', desc: 'USDT 优先通道', enabled: Boolean(bepusdt.enabled) }
+    { provider: 'alipay', method: 'page', name: '支付宝电脑网站', desc: '电脑浏览器优先使用', enabled: Boolean(alipay.enabled && alipayMethods.page !== false) },
+    { provider: 'alipay', method: 'wap', name: '支付宝 H5', desc: '手机浏览器优先使用', enabled: Boolean(alipay.enabled && alipayMethods.wap) },
+    { provider: 'alipay', method: 'precreate', name: '支付宝当面付', desc: '生成二维码扫码支付', enabled: Boolean(alipay.enabled && alipayMethods.precreate) },
+    { provider: 'wechat', method: 'native', name: '微信扫码', desc: '生成二维码扫码支付', enabled: Boolean(wechat.enabled && wechatMethods.native !== false) },
+    { provider: 'wechat', method: 'h5', name: '微信 H5', desc: '手机浏览器拉起微信支付', enabled: Boolean(wechat.enabled && wechatMethods.h5) },
+    { provider: 'epay', method: 'alipay', name: '易支付支付宝', desc: '支付宝备用聚合通道', enabled: Boolean(epay.enabled && epay.methods?.alipay) },
+    { provider: 'epay', method: 'wxpay', name: '易支付微信', desc: '微信备用聚合通道', enabled: Boolean(epay.enabled && epay.methods?.wxpay) },
+    { provider: 'epay', method: 'paypal', name: '易支付 PayPal', desc: 'PayPal 聚合通道', enabled: Boolean(epay.enabled && epay.methods?.paypal) },
+    { provider: 'epay', method: 'usdt', name: '易支付 USDT', desc: 'USDT 备用聚合通道', enabled: Boolean(epay.enabled && epay.methods?.usdt) },
+    { provider: 'bepusdt', method: 'usdt', name: 'BEpusdt USDT', desc: 'USDT 优先通道', enabled: Boolean(bepusdt.enabled) }
   ];
-  const activeRows = methodRows.filter((item) => item.enabled);
-  const methodRow = (item) => `<div class="payment-method-row" data-payment-method-row="${h(item.provider)}">
+  const rowConfigured = [
+    providerConfigured.alipay && alipayMethods.page !== false,
+    providerConfigured.alipay && Boolean(alipayMethods.wap),
+    providerConfigured.alipay && Boolean(alipayMethods.precreate),
+    providerConfigured.wechat && wechatMethods.native !== false,
+    providerConfigured.wechat && Boolean(wechatMethods.h5),
+    providerConfigured.epay && Boolean(epay.methods?.alipay),
+    providerConfigured.epay && Boolean(epay.methods?.wxpay),
+    providerConfigured.epay && Boolean(epay.methods?.paypal),
+    providerConfigured.epay && Boolean(epay.methods?.usdt),
+    providerConfigured.bepusdt
+  ];
+  methodRows.forEach((item, index) => { item.configured = Boolean(rowConfigured[index]); });
+  const configuredRows = methodRows.filter((item) => item.configured);
+  const enabledRows = configuredRows.filter((item) => item.enabled);
+  const methodRow = (item) => `<div class="payment-method-row ${item.enabled ? '' : 'disabled'}" data-payment-method-row="${h(item.provider)}">
     <div class="payment-method-main"><strong>${h(item.name)}</strong><span>${h(item.desc)}</span></div>
     <div class="payment-method-provider"><span class="payment-provider-tag">${h(providerNames[item.provider] || item.provider)}</span><small>用户端显示为${h(item.provider === 'epay' && item.name.includes('PayPal') ? ' PayPal' : item.provider === 'bepusdt' || item.name.includes('USDT') ? ' USDT' : item.provider === 'wechat' || item.name.includes('微信') ? ' 微信支付' : ' 支付宝')}</small></div>
-    <div class="payment-method-state"><span class="status active">已启用</span></div>
+    <div class="payment-method-state"><label class="switch-toggle" title="${item.enabled ? '关闭' : '启用'}"><input type="checkbox" data-payment-enable-toggle="${h(item.provider)}" data-payment-method="${h(item.method)}" ${item.enabled ? 'checked' : ''}><span></span></label></div>
     <div class="payment-method-actions">
       <button class="btn small" type="button" data-action="open-payment-editor" data-provider="${h(item.provider)}">配置</button>
     </div>
   </div>`;
   const editor = state.paymentEditor ? renderPaymentEditor(state.paymentEditor, { pay, epay, epayTypes, alipay, alipayMethods, bepusdt, wechat, wechatMethods }) : '';
-  return `<section class="panel settings-panel">
-    <div class="panel-head"><div><h2>支付设置</h2><p>用户端只显示支付宝、微信支付、PayPal、USDT；这里通过添加支付方式来维护实际通道。</p></div><button class="btn primary" type="button" data-action="open-payment-editor" data-provider="alipay">添加支付方式</button></div>
+  return `
+  ${summaryCards([
+    { label: '在线支付', value: pay.enabled ? '已开启' : '已关闭', detail: pay.enabled ? '用户端允许在线充值' : '用户端不会显示在线充值', tone: pay.enabled ? 'primary' : '' },
+    { label: '已配置方式', value: configuredRows.length, detail: `${enabledRows.length} 个正在启用` },
+    { label: '最低充值', value: `${money(pay.minAmount || 1)} ${state.db.settings.currency}`, detail: '用户端单笔最低金额' }
+  ])}
+  <section class="panel settings-panel payment-settings-panel">
+    <div class="panel-head"><div><h2>支付设置</h2><p>配置存在和启用状态分开管理；用户端只展示已启用的支付方式。</p></div><button class="btn primary" type="button" data-action="open-payment-editor" data-provider="alipay">添加支付方式</button></div>
     <form class="panel-body settings-form" data-settings-form="payments">
       <input type="hidden" name="paymentSettingsSubmitted" value="1">
       ${renderSection('基础支付配置', `
-        <div class="grid-3"><div class="field"><label>在线支付总开关</label><label class="check-row"><input name="paymentsEnabled" type="checkbox" ${pay.enabled ? 'checked' : ''}> 启用在线充值</label></div><div class="field"><label>最低充值金额</label><input name="paymentMinAmount" type="number" min="0.01" step="0.01" value="${h(pay.minAmount || 1)}"></div><div class="field"><label>快捷金额</label><input name="paymentAmounts" value="${h((pay.amounts || [10, 30, 50, 100]).join(','))}" placeholder="10,30,50,100"></div></div>
+        <div class="payment-base-grid"><div class="payment-master-switch"><div><strong>在线充值</strong><span>${pay.enabled ? '当前已开启，用户端可看到已启用支付方式。' : '当前已关闭，用户端不会展示在线支付。'}</span></div><label class="switch-toggle"><input name="paymentsEnabled" type="checkbox" ${pay.enabled ? 'checked' : ''}><span></span></label></div><div class="field"><label>最低充值金额</label><input name="paymentMinAmount" type="number" min="0.01" step="0.01" value="${h(pay.minAmount || 1)}"></div><div class="field"><label>快捷金额</label><input name="paymentAmounts" value="${h((pay.amounts || [10, 30, 50, 100]).join(','))}" placeholder="10,30,50,100"></div></div>
         <div class="field"><label>公网访问地址</label><input name="paymentSiteUrl" value="${h(pay.siteUrl || '')}" placeholder="https://你的域名.com"></div>
         <div class="form-note">回调地址或跳转地址留空时，系统会用公网访问地址自动生成。支付平台必须能访问这个域名。</div>
       `)}
-      ${renderSection('已添加的支付方式', activeRows.length ? `<div class="payment-method-list">${activeRows.map(methodRow).join('')}</div>` : '<div class="empty">还没有添加支付方式，点击右上角添加。</div>')}
+      ${renderSection('已添加的支付方式', configuredRows.length ? `<div class="payment-method-list">${configuredRows.map(methodRow).join('')}</div>` : '<div class="empty">还没有添加支付方式，点击右上角添加。</div>')}
       ${editor}
       <div class="form-actions"><button class="btn primary" type="submit">保存支付设置</button></div>
     </form>
@@ -1020,13 +1065,13 @@ function renderUserApp() {
     <section class="app-shell">
       <aside class="sidebar">
         <div class="brand">${brandMark()}<span>${h(appTitle('用户中心'))}</span></div>
-        <nav class="nav">${userNavItems.map(([view, label, icon]) => navButton(view, label, icon, state.userView)).join('')}</nav>
-        <div class="sidebar-footer">登录用户：${h(state.user)}<br>已绑定服务：${nodes.length}<br>余额：${money(customer.balance)} ${h(state.db.settings.currency)}</div>
+        <nav class="nav">${renderUserNav()}</nav>
+        ${sidebarAccount([`登录用户：${h(state.user)}`, `已绑定服务：${nodes.length}`, `余额：${money(customer.balance)} ${h(state.db.settings.currency)}`])}
       </aside>
       <section class="content">
         <div class="topbar">
-          <div><div class="eyebrow">用户中心</div><h1>${userPageTitle()}</h1><div class="sub">购买卡密、兑换余额、按节点续费和查看服务状态。</div></div>
-          <div class="actions"><button class="btn primary" data-action="buy-card-link">购买卡密</button><button class="btn" data-action="refresh">刷新</button><button class="btn danger" data-action="logout">退出</button></div>
+          <div><div class="eyebrow">用户中心</div><h1>${userPageTitle()}</h1><div class="sub">兑换余额、按节点续费和查看服务状态。</div></div>
+          <div class="actions">${iconButton('refresh', 'refresh', '刷新数据')}${iconButton('logout', 'logout', '退出登录', 'mobile-only')}</div>
         </div>
         ${renderUserSummary()}
         ${renderUserView()}
@@ -1113,11 +1158,13 @@ function renderUserHome() {
 }
 
 function renderRenewNodeCard(node) {
-  const canRenew = Number(node.renewPrice || 0) > 0 && node.status !== 'disabled';
+  const reason = nodeDisabledReasonText(node);
+  const canRenew = Number(node.renewPrice || 0) > 0 && nodeCanSelfRenew(node);
   const busy = isBusy(`renew:${node.id}`);
   const disabled = !canRenew || busy;
   return `<article class="user-node-card">
     <header><div><span>服务名称</span><strong>${h(node.name || '当前服务')}</strong></div><span class="status ${node.status}">${statusText[node.status] || node.status}</span></header>
+    ${reason ? `<div class="node-reason">${h(reason)}</div>` : ''}
     <div class="renew-summary node-renew-summary">
       <div><span>续费价格</span><strong>${money(node.renewPrice)} ${h(state.db.settings.currency)} / 月</strong></div>
       <div><span>账户余额</span><strong>${money(state.db.customer.balance)} ${h(state.db.settings.currency)}</strong></div>
@@ -1135,12 +1182,15 @@ function renderUserFinanceLogs() {
   const balanceLogs = state.db.balanceLogs || [];
   const renewalLogs = state.db.renewalLogs || [];
   const rechargeOrders = state.db.rechargeOrders || [];
+  const rechargeTable = `<table><thead><tr><th>时间</th><th>支付方式</th><th>金额</th><th>状态</th></tr></thead><tbody>${rechargeOrders.length ? rechargeOrders.map((order) => `<tr><td>${fmtDate(order.createdAt)}</td><td>${h(paymentMethodText(order.method))}</td><td>${money(order.amount)} ${h(state.db.settings.currency)}</td><td><span class="status ${order.status === 'paid' ? 'success' : order.status === 'failed' ? 'failed' : 'warning'}">${statusText[order.status] || order.status || '-'}</span></td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无在线充值订单。</td></tr>`}</tbody></table>`;
+  const balanceTable = `<table><thead><tr><th>时间</th><th>类型</th><th>变动</th><th>余额</th></tr></thead><tbody>${balanceLogs.length ? balanceLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(balanceTypeText(log.type))}</td><td class="mono ${Number(log.amount || 0) < 0 ? 'danger-text' : 'success-text'}">${Number(log.amount || 0) > 0 ? '+' : ''}${money(log.amount)}</td><td>${money(log.afterBalance)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无余额流水。</td></tr>`}</tbody></table>`;
+  const renewalTable = `<table><thead><tr><th>时间</th><th>月数</th><th>金额</th><th>到期</th></tr></thead><tbody>${renewalLogs.length ? renewalLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(log.months || 1)}</td><td>${money(log.price)} ${h(state.db.settings.currency)}</td><td>${fmtDate(log.afterExpireAt)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无续费记录。</td></tr>`}</tbody></table>`;
   return `<section class="panel compact-panel">
     <div class="panel-head"><div><h2>账户记录</h2><p>这里只显示当前账号自己的充值和续费记录。</p></div></div>
-    <div class="finance-orders"><h3>在线充值</h3><table><thead><tr><th>时间</th><th>支付方式</th><th>金额</th><th>状态</th></tr></thead><tbody>${rechargeOrders.length ? rechargeOrders.map((order) => `<tr><td>${fmtDate(order.createdAt)}</td><td>${h(paymentMethodText(order.method))}</td><td>${money(order.amount)} ${h(state.db.settings.currency)}</td><td><span class="status ${order.status === 'paid' ? 'success' : order.status === 'failed' ? 'failed' : 'warning'}">${statusText[order.status] || order.status || '-'}</span></td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无在线充值订单。</td></tr>`}</tbody></table></div>
-    <div class="grid-2 finance-mini-grid">
-      <div><h3>余额流水</h3><table><thead><tr><th>时间</th><th>类型</th><th>变动</th><th>余额</th></tr></thead><tbody>${balanceLogs.length ? balanceLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(balanceTypeText(log.type))}</td><td class="mono ${Number(log.amount || 0) < 0 ? 'danger-text' : 'success-text'}">${Number(log.amount || 0) > 0 ? '+' : ''}${money(log.amount)}</td><td>${money(log.afterBalance)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无余额流水。</td></tr>`}</tbody></table></div>
-      <div><h3>续费记录</h3><table><thead><tr><th>时间</th><th>月数</th><th>金额</th><th>到期</th></tr></thead><tbody>${renewalLogs.length ? renewalLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(log.months || 1)}</td><td>${money(log.price)} ${h(state.db.settings.currency)}</td><td>${fmtDate(log.afterExpireAt)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无续费记录。</td></tr>`}</tbody></table></div>
+    <div class="collapse-stack">
+      ${collapsibleSection({ title: '在线充值', desc: '支付订单状态', count: rechargeOrders.length, open: true, body: rechargeTable })}
+      ${collapsibleSection({ title: '余额流水', desc: '余额变动明细', count: balanceLogs.length, body: balanceTable })}
+      ${collapsibleSection({ title: '续费记录', desc: '服务续费历史', count: renewalLogs.length, body: renewalTable })}
     </div>
   </section>`;
 }
@@ -1160,6 +1210,7 @@ function renderUserNodeAccessCard(node) {
   const copyBusy = isBusy(`copy-node:${node.id}`);
   const qrBusy = isBusy(`qr-node:${node.id}`);
   const lockActions = copyBusy || qrBusy;
+  const reason = nodeDisabledReasonText(node);
   return `<article class="user-node-card node-access">
       <div class="node-profile">
         <div class="node-name-block">
@@ -1168,6 +1219,7 @@ function renderUserNodeAccessCard(node) {
         </div>
         <span class="status ${node.status}">${statusText[node.status] || node.status}</span>
       </div>
+      ${reason ? `<div class="node-reason">${h(reason)}</div>` : ''}
       <div class="node-meta-grid">
         <div><span>续费价格</span><strong>${money(node.renewPrice)} ${h(state.db.settings.currency)} / 月</strong></div>
         <div><span>到期时间</span><strong>${fmtDate(node.expireAt)}</strong></div>
@@ -1190,32 +1242,70 @@ function renderDrawer() {
   const { type, item } = state.drawer;
   const currentItem = item || {};
   const editing = Boolean(item && !item.customerOnly);
-  const title = {
-    customer: editing ? '编辑用户' : '新建用户',
-    server: editing ? '编辑 3x-ui 节点' : '添加 3x-ui 节点',
-    serviceNode: editing ? '编辑服务节点' : '添加服务节点',
-    customerNode: currentItem.id ? '编辑用户节点' : '绑定用户节点',
-    customerNodes: '用户节点管理',
-    socks: item ? '编辑 SOCKS 出站' : '添加 SOCKS 出站',
-    cards: '生成卡密',
-    balance: '调整余额'
-  }[type];
+  const drawerMeta = drawerTitleMeta(type, currentItem, editing);
   return `<div class="drawer-backdrop" data-drawer-backdrop>
     <form class="drawer" id="drawerForm" data-drawer-type="${type}" data-id="${currentItem.id || ''}">
-      <header><h2>${title}</h2><button class="btn icon" type="button" data-action="close-drawer">×</button></header>
+      <header><div><span class="drawer-kicker">${h(drawerMeta.kicker)}</span><h2>${h(drawerMeta.title)}</h2><p>${h(drawerMeta.desc)}</p></div><button class="btn icon" type="button" data-action="close-drawer" aria-label="关闭">×</button></header>
       <div class="drawer-body">${drawerFields(type, currentItem)}</div>
-      <footer><button class="btn" type="button" data-action="close-drawer">${type === 'customerNodes' ? '关闭' : '取消'}</button>${type === 'customerNodes' ? '' : '<button class="btn primary" type="submit">保存</button>'}</footer>
+      <footer><span class="drawer-footer-note">${type === 'customerNodes' ? '节点改动会单独确认并保存。' : '确认无误后保存，系统会立即生效。'}</span><div class="drawer-footer-actions"><button class="btn" type="button" data-action="close-drawer">${type === 'customerNodes' ? '关闭' : '取消'}</button>${type === 'customerNodes' ? '' : '<button class="btn primary" type="submit">保存</button>'}</div></footer>
     </form>
   </div>`;
+}
+
+function drawerTitleMeta(type, item = {}, editing = false) {
+  const customer = type === 'customerNodes' ? customerById(item.customerId) : null;
+  return {
+    customer: {
+      kicker: '用户资料',
+      title: editing ? '编辑用户' : '新建用户',
+      desc: editing ? '维护登录账号、联系方式、余额和账号状态。' : '创建一个可在用户端登录和后续绑定节点的账号。'
+    },
+    server: {
+      kicker: '基础设施',
+      title: editing ? '编辑 3x-ui 节点' : '添加 3x-ui 节点',
+      desc: '填写面板连接信息，供服务节点同步和客户端配置使用。'
+    },
+    serviceNode: {
+      kicker: '服务套餐',
+      title: editing ? '编辑服务节点' : '添加服务节点',
+      desc: '设置用户可绑定的收费节点模板、流量和入站参数。'
+    },
+    customerNode: {
+      kicker: '用户服务',
+      title: item.id ? '编辑用户节点' : '绑定用户节点',
+      desc: '为用户绑定具体服务，并维护到期时间、流量和客户端标识。'
+    },
+    customerNodes: {
+      kicker: '节点管理',
+      title: '用户节点管理',
+      desc: `${customer?.name || item.customerName || '当前用户'} 的服务绑定、续费、同步和删除操作。`
+    },
+    socks: {
+      kicker: '出站中转',
+      title: item ? '编辑 SOCKS 出站' : '添加 SOCKS 出站',
+      desc: '配置可挂载到服务节点上的 SOCKS 中转出口。'
+    },
+    cards: {
+      kicker: '卡密批次',
+      title: '生成卡密',
+      desc: '按金额、数量和分类批量生成可兑换余额的卡密。'
+    },
+    balance: {
+      kicker: '财务调整',
+      title: '调整余额',
+      desc: `当前用户：${item.name || '-'}，请填写调整方式、金额和备注。`
+    }
+  }[type] || { kicker: '编辑', title: '编辑信息', desc: '填写表单后保存。' };
 }
 
 function renderModal() {
   const modal = state.modal || {};
   const hasInput = Boolean(modal.input);
   const confirmClass = modal.tone === 'danger' ? 'btn danger solid' : 'btn primary';
+  const icon = modal.tone === 'danger' ? '!' : 'i';
   return `<div class="modal-backdrop" data-modal-backdrop>
-    <form class="modal-card" id="modalForm">
-      <div class="modal-icon ${h(modal.tone || 'default')}">${modal.tone === 'danger' ? '!' : '?'}</div>
+    <form class="modal-card ${h(modal.tone || 'default')}" id="modalForm">
+      <div class="modal-icon ${h(modal.tone || 'default')}">${icon}</div>
       <div class="modal-content">
         <h2>${h(modal.title)}</h2>
         ${modal.message ? `<p>${h(modal.message)}</p>` : ''}
@@ -1296,11 +1386,12 @@ function drawerFields(type, item = {}) {
       <div class="node-admin-list">${bindings.length ? bindings.map((binding) => {
         const serviceNode = serviceNodeById(binding.nodeId);
         const status = customerNodeStatus(binding);
+        const reason = nodeDisabledReasonText(binding);
         return `<div class="node-admin-item">
           <div><strong>${h(customerNodeName(binding))}</strong><span>${h(serviceNode?.name || '服务节点不存在')}</span></div>
           <div><small>到期</small><b>${fmtDate(binding.expireAt)}</b></div>
           <div><small>价格</small><b>${money(serviceNode?.amount || 0)} ${h(state.db.settings.currency)}/月</b></div>
-          <span class="status ${status}">${statusText[status] || status}</span>
+          <div class="node-status-stack"><span class="status ${status}">${statusText[status] || status}</span>${reason ? `<small>${h(reason)}</small>` : ''}</div>
           <div class="row-actions"><button class="btn small primary" type="button" data-action="renew-customer-node" data-id="${customer.id}" data-node-id="${binding.id}">续费</button><button class="btn small" type="button" data-action="sync-customer-node" data-id="${customer.id}" data-node-id="${binding.id}">同步</button><button class="btn small" type="button" data-action="edit-customer-node" data-id="${customer.id}" data-node-id="${binding.id}">编辑</button><button class="btn small danger" type="button" data-action="delete-customer-node" data-id="${customer.id}" data-node-id="${binding.id}">删除</button></div>
         </div>`;
       }).join('') : '<div class="empty">这个用户还没有绑定节点。</div>'}</div>
@@ -1371,37 +1462,94 @@ function bindEvents() {
   drawerForm?.addEventListener('submit', handleDrawerSubmit);
   drawerForm?.querySelector('[data-service-node-picker]')?.addEventListener('change', updateCustomerNodeDefaults);
   document.querySelectorAll('[data-settings-form]').forEach((form) => form.addEventListener('submit', handleSettingsFormSubmit));
-  document.querySelectorAll('[data-payment-select]').forEach((button) => button.addEventListener('click', () => {
-    const form = button.closest('[data-settings-form="payments"]');
-    const next = button.dataset.paymentSelect || '';
-    if (form) form.dataset.activePayment = form.dataset.activePayment === next ? '' : next;
-    updatePaymentProviderVisibility();
-  }));
-  document.querySelectorAll('[data-payment-toggle]').forEach((input) => input.addEventListener('change', updatePaymentProviderVisibility));
-  updatePaymentProviderVisibility();
+  document.querySelectorAll('[data-payment-enable-toggle]').forEach((input) => input.addEventListener('change', handlePaymentEnableToggle));
   document.querySelector('#redeemForm')?.addEventListener('submit', handleRedeemSubmit);
   document.querySelector('#rechargeForm')?.addEventListener('submit', handleRechargeSubmit);
   document.querySelector('#userProfileForm')?.addEventListener('submit', handleUserProfileSubmit);
   document.querySelectorAll('.user-renew-form').forEach((form) => form.addEventListener('submit', handleUserRenewSubmit));
 }
 
-function updatePaymentProviderVisibility() {
-  const form = document.querySelector('[data-settings-form="payments"]');
-  const active = form?.dataset.activePayment || '';
-  document.querySelectorAll('[data-payment-section]').forEach((box) => {
-    const section = box.dataset.paymentSection;
-    const input = document.querySelector(`[data-payment-toggle="${section}"]`);
-    const fields = document.querySelector(`[data-payment-fields="${section}"]`);
-    const isActive = section === active;
-    fields?.classList.toggle('hidden', !isActive);
-    box.classList.toggle('active', isActive);
-    box.classList.toggle('disabled', input ? !input.checked : false);
-  });
-  document.querySelectorAll('[data-payment-toggle]').forEach((input) => {
-    const section = input.dataset.paymentToggle;
-    const box = document.querySelector(`[data-payment-section="${section}"]`);
-    box?.classList.toggle('disabled', !input.checked);
-  });
+function paymentSettingsPayload(overrides = {}) {
+  const current = state.db.settings?.payments || {};
+  const alipay = current.alipay || { methods: {} };
+  const epay = current.epay || { methods: {}, types: {} };
+  const bepusdt = current.bepusdt || {};
+  const wechat = current.wechat || { methods: {} };
+  const payload = {
+    paymentSettingsSubmitted: 1,
+    paymentsEnabled: Boolean(current.enabled),
+    paymentSiteUrl: current.siteUrl || '',
+    paymentMinAmount: current.minAmount || 1,
+    paymentAmounts: (current.amounts || [10, 30, 50, 100]).join(','),
+    alipayEnabled: Boolean(alipay.enabled),
+    alipayGateway: alipay.gateway || '',
+    alipayNotifyUrl: alipay.notifyUrl || '',
+    alipayReturnUrl: alipay.returnUrl || '',
+    alipayAppId: alipay.appId || '',
+    alipayMethodPage: alipay.methods?.page !== false,
+    alipayMethodWap: Boolean(alipay.methods?.wap),
+    alipayMethodPrecreate: Boolean(alipay.methods?.precreate),
+    epayEnabled: Boolean(epay.enabled),
+    epayGateway: epay.gateway || '',
+    epayNotifyUrl: epay.notifyUrl || '',
+    epayReturnUrl: epay.returnUrl || '',
+    epayPid: epay.pid || '',
+    epaySignType: epay.signType || 'MD5',
+    epayMethodAlipay: Boolean(epay.methods?.alipay),
+    epayMethodWxpay: Boolean(epay.methods?.wxpay),
+    epayMethodPaypal: Boolean(epay.methods?.paypal),
+    epayMethodUsdt: Boolean(epay.methods?.usdt),
+    epayTypeAlipay: epay.types?.alipay || 'alipay',
+    epayTypeWxpay: epay.types?.wxpay || 'wxpay',
+    epayTypePaypal: epay.types?.paypal || 'paypal',
+    epayTypeUsdt: epay.types?.usdt || 'usdt.trc20',
+    bepusdtEnabled: Boolean(bepusdt.enabled),
+    bepusdtAppUrl: bepusdt.appUrl || '',
+    bepusdtNotifyUrl: bepusdt.notifyUrl || '',
+    bepusdtReturnUrl: bepusdt.returnUrl || '',
+    bepusdtTradeType: bepusdt.tradeType || 'usdt.trc20',
+    wechatEnabled: Boolean(wechat.enabled),
+    wechatMethodNative: wechat.methods?.native !== false,
+    wechatMethodH5: Boolean(wechat.methods?.h5),
+    wechatAppId: wechat.appId || '',
+    wechatMchId: wechat.mchId || '',
+    wechatMerchantSerialNo: wechat.merchantSerialNo || '',
+    wechatPlatformSerialNo: wechat.platformSerialNo || '',
+    wechatNotifyUrl: wechat.notifyUrl || '',
+    wechatReturnUrl: wechat.returnUrl || '',
+    wechatDescription: wechat.description || 'Account balance recharge'
+  };
+  return { ...payload, ...overrides };
+}
+
+async function handlePaymentEnableToggle(event) {
+  const input = event.currentTarget;
+  const provider = input.dataset.paymentEnableToggle;
+  const method = input.dataset.paymentMethod;
+  const methodFields = {
+    alipay: { page: 'alipayMethodPage', wap: 'alipayMethodWap', precreate: 'alipayMethodPrecreate' },
+    wechat: { native: 'wechatMethodNative', h5: 'wechatMethodH5' },
+    epay: { alipay: 'epayMethodAlipay', wxpay: 'epayMethodWxpay', paypal: 'epayMethodPaypal', usdt: 'epayMethodUsdt' },
+    bepusdt: { usdt: 'bepusdtEnabled' }
+  };
+  const providerFields = { alipay: 'alipayEnabled', wechat: 'wechatEnabled', epay: 'epayEnabled', bepusdt: 'bepusdtEnabled' };
+  const field = methodFields[provider]?.[method] || providerFields[provider];
+  if (!field) return;
+  const checked = Boolean(input.checked);
+  const overrides = { [field]: checked };
+  if (checked && providerFields[provider]) overrides[providerFields[provider]] = true;
+  input.disabled = true;
+  try {
+    const result = await api('/api/settings', { method: 'PUT', body: paymentSettingsPayload(overrides) });
+    state.db = result.data;
+    state.paymentEditor = '';
+    render();
+    toast(checked ? '支付方式已启用' : '支付方式已关闭');
+  } catch (error) {
+    input.checked = !checked;
+    input.disabled = false;
+    toast(error.message);
+  }
 }
 
 function updateCustomerNodeDefaults(event) {
@@ -1766,6 +1914,7 @@ async function handleSettingsFormSubmit(event) {
   const form = event.currentTarget;
   const type = form.dataset.settingsForm;
   const body = Object.fromEntries(new FormData(form));
+  setSubmitState(form, true, '保存中...');
   try {
     if (type === 'security') {
       if (body.newPassword !== body.confirmPassword) return toast('两次输入的新密码不一致');
@@ -1793,8 +1942,8 @@ async function handleSettingsFormSubmit(event) {
         wechatMethodH5: Boolean(current.wechat?.methods?.h5)
       };
       Object.keys(currentFlags).forEach((name) => {
-        const input = form.querySelector(`[name="${name}"]`);
-        body[name] = input ? Boolean(input.checked) : currentFlags[name];
+        const inputs = [...form.querySelectorAll(`[name="${name}"]`)];
+        body[name] = inputs.length ? inputs.some((input) => input.checked) : currentFlags[name];
       });
     }
     if (type === 'settings') {
@@ -1819,6 +1968,8 @@ async function handleSettingsFormSubmit(event) {
     return toast(result.warning || `系统设置已保存，管理员入口：${result.data?.settings?.adminPath || body.adminPath || '/admin'}`);
   } catch (error) {
     toast(error.message);
+  } finally {
+    if (document.body.contains(form)) setSubmitState(form, false);
   }
 }
 
@@ -1831,6 +1982,7 @@ async function handleDrawerSubmit(event) {
   if (body.expireAt) body.expireAt = toIsoLocal(body.expireAt);
   body.useSocks = Boolean(form.querySelector('[name="useSocks"]')?.checked);
   body.autoCreateInbound = Boolean(form.querySelector('[name="autoCreateInbound"]')?.checked);
+  setSubmitState(form, true, type === 'cards' ? '生成中...' : '保存中...');
   try {
     let result;
     if (type === 'customer') result = await api(id ? `/api/customers/${id}` : '/api/customers', { method: id ? 'PUT' : 'POST', body });
@@ -1853,6 +2005,8 @@ async function handleDrawerSubmit(event) {
     toast(result.warning || message);
   } catch (error) {
     toast(error.message);
+  } finally {
+    if (document.body.contains(form)) setSubmitState(form, false);
   }
 }
 

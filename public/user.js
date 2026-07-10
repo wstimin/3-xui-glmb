@@ -28,10 +28,20 @@ const state = {
 let modalResolver = null;
 
 const userNavItems = [
-  ['user-home', '充值续费', 'B'],
-  ['user-nodes', '节点管理', 'N'],
-  ['user-profile', '账号资料', 'A']
+  ['user-home', '充值续费', 'wallet'],
+  ['user-nodes', '节点管理', 'server'],
+  ['user-profile', '账号资料', 'user']
 ];
+
+const navIcons = {
+  user: '<path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="7" r="4"/>',
+  server: '<rect width="20" height="8" x="2" y="2" rx="2"/><rect width="20" height="8" x="2" y="14" rx="2"/><path d="M6 6h.01"/><path d="M6 18h.01"/>',
+  wallet: '<path d="M19 7V5a2 2 0 0 0-2-2H5a3 3 0 0 0 0 6h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3v1a2 2 0 0 1-2 2H5a3 3 0 0 1-3-3V6"/><path d="M18 14h.01"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.51a2 2 0 0 1 1-1.72l.15-.1a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/>',
+  refresh: '<path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5"/><path d="M21 12H9"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>'
+};
 
 function branding() {
   const settings = state.db?.settings || state.branding || {};
@@ -92,6 +102,21 @@ const statusText = {
   used: '已使用',
   enabled: '启用'
 };
+
+const disabledReasonText = {
+  expired: '已过期自动停用',
+  traffic_exceeded: '流量超限自动停用',
+  remote_disabled: '远端已停用',
+  manual: '手动停用'
+};
+
+function nodeDisabledReasonText(node = {}) {
+  return disabledReasonText[node.disabledReason] || (node.status === 'disabled' ? '已停用' : '');
+}
+
+function nodeCanSelfRenew(node = {}) {
+  return node.status !== 'disabled' || ['expired', 'traffic_exceeded'].includes(String(node.disabledReason || ''));
+}
 
 const isPaymentResultPage = location.pathname.replace(/\/+$/, '') === '/payment/result';
 
@@ -354,8 +379,32 @@ function render() {
   return renderUserApp();
 }
 
+function uiIcon(icon) {
+  const paths = navIcons[icon] || navIcons.settings;
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+}
+
+function navIcon(icon) {
+  return `<span class="nav-icon" aria-hidden="true">${uiIcon(icon)}</span>`;
+}
+
 function navButton(view, label, icon, activeView) {
-  return `<button class="${activeView === view ? 'active' : ''}" data-view="${view}" data-icon="${icon}">${label}</button>`;
+  return `<button class="${activeView === view ? 'active' : ''}" data-view="${view}">${navIcon(icon)}<span class="nav-label">${h(label)}</span></button>`;
+}
+
+function iconButton(action, icon, title, extraClass = '') {
+  return `<button class="btn icon ${extraClass}" type="button" data-action="${h(action)}" title="${h(title)}" aria-label="${h(title)}">${uiIcon(icon)}</button>`;
+}
+
+function sidebarAccount(lines = []) {
+  return `<div class="sidebar-footer account-footer"><div class="account-meta">${lines.map((line) => `<span>${line}</span>`).join('')}</div><button class="sidebar-logout" type="button" data-action="logout">${uiIcon('logout')}<span>退出登录</span></button></div>`;
+}
+
+function collapsibleSection({ title, desc = '', count = 0, open = false, body = '' }) {
+  return `<details class="collapse-section" ${open ? 'open' : ''}>
+    <summary><div><strong>${h(title)}</strong>${desc ? `<span>${h(desc)}</span>` : ''}</div><em>${h(count)} 条</em>${uiIcon('chevron')}</summary>
+    <div class="collapse-body">${body}</div>
+  </details>`;
 }
 
 function renderUserApp() {
@@ -367,12 +416,12 @@ function renderUserApp() {
       <aside class="sidebar">
         <div class="brand">${brandMark()}<span>${h(appTitle('用户中心'))}</span></div>
         <nav class="nav">${userNavItems.map(([view, label, icon]) => navButton(view, label, icon, state.userView)).join('')}</nav>
-        <div class="sidebar-footer">登录用户：${h(state.user)}<br>服务数量：${nodes.length}<br>余额：${money(customer.balance)} ${h(state.db.settings.currency)}</div>
+        ${sidebarAccount([`登录用户：${h(state.user)}`, `服务数量：${nodes.length}`, `余额：${money(customer.balance)} ${h(state.db.settings.currency)}`])}
       </aside>
       <section class="content">
         <div class="topbar">
-          <div><div class="eyebrow">用户中心</div><h1>${userPageTitle()}</h1><div class="sub">购买卡密、兑换余额、按节点续费和查看服务状态。</div></div>
-          <div class="actions"><button class="btn primary" data-action="buy-card-link">购买卡密</button><button class="btn" data-action="refresh">刷新</button><button class="btn danger" data-action="logout">退出</button></div>
+          <div><div class="eyebrow">用户中心</div><h1>${userPageTitle()}</h1><div class="sub">兑换余额、按节点续费和查看服务状态。</div></div>
+          <div class="actions">${iconButton('refresh', 'refresh', '刷新数据')}${iconButton('logout', 'logout', '退出登录', 'mobile-only')}</div>
         </div>
         ${renderUserSummary()}
         ${renderUserView()}
@@ -473,11 +522,13 @@ function renderUserHome() {
 }
 
 function renderRenewNodeCard(node) {
-  const canRenew = Number(node.renewPrice || 0) > 0 && node.status !== 'disabled';
+  const reason = nodeDisabledReasonText(node);
+  const canRenew = Number(node.renewPrice || 0) > 0 && nodeCanSelfRenew(node);
   const busy = isBusy(`renew:${node.id}`);
   const disabled = !canRenew || busy;
   return `<article class="user-node-card">
     <header><div><span>服务名称</span><strong>${h(node.name || '当前服务')}</strong></div><span class="status ${node.status}">${statusText[node.status] || node.status}</span></header>
+    ${reason ? `<div class="node-reason">${h(reason)}</div>` : ''}
     <div class="renew-summary node-renew-summary">
       <div><span>续费价格</span><strong>${money(node.renewPrice)} ${h(state.db.settings.currency)} / 月</strong></div>
       <div><span>账户余额</span><strong>${money(state.db.customer.balance)} ${h(state.db.settings.currency)}</strong></div>
@@ -495,12 +546,15 @@ function renderUserFinanceLogs() {
   const balanceLogs = state.db.balanceLogs || [];
   const renewalLogs = state.db.renewalLogs || [];
   const rechargeOrders = state.db.rechargeOrders || [];
+  const rechargeTable = `<table><thead><tr><th>时间</th><th>支付方式</th><th>金额</th><th>状态</th></tr></thead><tbody>${rechargeOrders.length ? rechargeOrders.map((order) => `<tr><td>${fmtDate(order.createdAt)}</td><td>${h(paymentMethodText(order.method))}</td><td>${money(order.amount)} ${h(state.db.settings.currency)}</td><td><span class="status ${order.status === 'paid' ? 'success' : order.status === 'failed' ? 'failed' : 'warning'}">${statusText[order.status] || order.status || '-'}</span></td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无在线充值订单。</td></tr>`}</tbody></table>`;
+  const balanceTable = `<table><thead><tr><th>时间</th><th>类型</th><th>变动</th><th>余额</th></tr></thead><tbody>${balanceLogs.length ? balanceLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(balanceTypeText(log.type))}</td><td class="mono ${Number(log.amount || 0) < 0 ? 'danger-text' : 'success-text'}">${Number(log.amount || 0) > 0 ? '+' : ''}${money(log.amount)}</td><td>${money(log.afterBalance)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无余额流水。</td></tr>`}</tbody></table>`;
+  const renewalTable = `<table><thead><tr><th>时间</th><th>月数</th><th>金额</th><th>到期</th></tr></thead><tbody>${renewalLogs.length ? renewalLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(log.months || 1)}</td><td>${money(log.price)} ${h(state.db.settings.currency)}</td><td>${fmtDate(log.afterExpireAt)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无续费记录。</td></tr>`}</tbody></table>`;
   return `<section class="panel compact-panel">
     <div class="panel-head"><div><h2>账户记录</h2><p>这里只显示当前账号自己的充值和续费记录。</p></div></div>
-    <div class="finance-orders"><h3>在线充值</h3><table><thead><tr><th>时间</th><th>支付方式</th><th>金额</th><th>状态</th></tr></thead><tbody>${rechargeOrders.length ? rechargeOrders.map((order) => `<tr><td>${fmtDate(order.createdAt)}</td><td>${h(paymentMethodText(order.method))}</td><td>${money(order.amount)} ${h(state.db.settings.currency)}</td><td><span class="status ${order.status === 'paid' ? 'success' : order.status === 'failed' ? 'failed' : 'warning'}">${statusText[order.status] || order.status || '-'}</span></td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无在线充值订单。</td></tr>`}</tbody></table></div>
-    <div class="grid-2 finance-mini-grid">
-      <div><h3>余额流水</h3><table><thead><tr><th>时间</th><th>类型</th><th>变动</th><th>余额</th></tr></thead><tbody>${balanceLogs.length ? balanceLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(balanceTypeText(log.type))}</td><td class="mono ${Number(log.amount || 0) < 0 ? 'danger-text' : 'success-text'}">${Number(log.amount || 0) > 0 ? '+' : ''}${money(log.amount)}</td><td>${money(log.afterBalance)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无余额流水。</td></tr>`}</tbody></table></div>
-      <div><h3>续费记录</h3><table><thead><tr><th>时间</th><th>月数</th><th>金额</th><th>到期</th></tr></thead><tbody>${renewalLogs.length ? renewalLogs.map((log) => `<tr><td>${fmtDate(log.createdAt)}</td><td>${h(log.months || 1)}</td><td>${money(log.price)} ${h(state.db.settings.currency)}</td><td>${fmtDate(log.afterExpireAt)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty">暂无续费记录。</td></tr>`}</tbody></table></div>
+    <div class="collapse-stack">
+      ${collapsibleSection({ title: '在线充值', desc: '支付订单状态', count: rechargeOrders.length, open: true, body: rechargeTable })}
+      ${collapsibleSection({ title: '余额流水', desc: '余额变动明细', count: balanceLogs.length, body: balanceTable })}
+      ${collapsibleSection({ title: '续费记录', desc: '服务续费历史', count: renewalLogs.length, body: renewalTable })}
     </div>
   </section>`;
 }
@@ -520,6 +574,7 @@ function renderUserNodeAccessCard(node) {
   const copyBusy = isBusy(`copy-node:${node.id}`);
   const qrBusy = isBusy(`qr-node:${node.id}`);
   const lockActions = copyBusy || qrBusy;
+  const reason = nodeDisabledReasonText(node);
   return `<article class="user-node-card node-access">
       <div class="node-profile">
         <div class="node-name-block">
@@ -528,6 +583,7 @@ function renderUserNodeAccessCard(node) {
         </div>
         <span class="status ${node.status}">${statusText[node.status] || node.status}</span>
       </div>
+      ${reason ? `<div class="node-reason">${h(reason)}</div>` : ''}
       <div class="node-meta-grid">
         <div><span>续费价格</span><strong>${money(node.renewPrice)} ${h(state.db.settings.currency)} / 月</strong></div>
         <div><span>到期时间</span><strong>${fmtDate(node.expireAt)}</strong></div>

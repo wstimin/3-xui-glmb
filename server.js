@@ -21,6 +21,7 @@ const MAX_JSON_BODY_BYTES = 1024 * 1024;
 const LOGIN_WINDOW_MS = 10 * 60 * 1000;
 const LOGIN_MAX_ATTEMPTS = 8;
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+const NODE_MAINTENANCE_INTERVAL_MS = 10 * 60 * 1000;
 const REDIS_URL = String(process.env.REDIS_URL || '').trim();
 const SESSION_PREFIX = String(process.env.SESSION_PREFIX || 'shiye:session:').trim() || 'shiye:session:';
 
@@ -30,6 +31,8 @@ let mysqlPool = null;
 let redisClient = null;
 let apiWriteQueue = Promise.resolve();
 let setupRequired = false;
+let maintenanceRunning = false;
+let maintenanceTimer = null;
 
 setInterval(() => {
   const now = Date.now();
@@ -1740,7 +1743,7 @@ async function renewCustomerNodeForUserMysql(customerId, customerNodeId, monthsI
       error.statusCode = 404;
       throw error;
     }
-    if (binding.status === 'disabled') {
+    if (binding.status === 'disabled' && !autoDisabledReason(binding.disabledReason)) {
       const error = new Error('当前节点已停用，无法自助续费');
       error.statusCode = 400;
       throw error;
@@ -1767,13 +1770,15 @@ async function renewCustomerNodeForUserMysql(customerId, customerNodeId, monthsI
     const oldExpireAt = binding.expireAt;
     const beforeBalance = Number(customer.balance || 0);
     const newExpireAt = addMonths(binding.expireAt, months);
+    const shouldResetTraffic = binding.disabledReason === 'traffic_exceeded';
+    const renewedBinding = { ...binding, expireAt: newExpireAt, status: 'active', disabledReason: '', disabledAt: '', resetTraffic: shouldResetTraffic };
     const syncDb = {
       ...db,
       customers: db.customers.map((item) => item.id === customer.id ? customer : item),
       serviceNodes: db.serviceNodes.map((item) => item.id === serviceNode.id ? serviceNode : item),
-      customerNodes: db.customerNodes.map((item) => item.id === binding.id ? { ...binding, expireAt: newExpireAt, status: 'active' } : item)
+      customerNodes: db.customerNodes.map((item) => item.id === binding.id ? renewedBinding : item)
     };
-    const target = customerSyncTarget(syncDb, customer, { ...binding, expireAt: newExpireAt, status: 'active' });
+    const target = customerSyncTarget(syncDb, customer, renewedBinding);
     detail = { nodeId: binding.id, serviceNodeId: serviceNode.id, nodeName: binding.name || serviceNode.name || '', months, unitPrice, price, oldExpireAt, newExpireAt, warnings: [] };
 
     try {
@@ -1790,6 +1795,8 @@ async function renewCustomerNodeForUserMysql(customerId, customerNodeId, monthsI
     customer.updatedAt = nowIso();
     binding.expireAt = newExpireAt;
     binding.status = 'active';
+    binding.disabledReason = '';
+    binding.disabledAt = '';
     binding.updatedAt = nowIso();
     updatedCustomer = customer;
     updatedBinding = binding;
@@ -1952,6 +1959,7 @@ function customerSyncTarget(db, customer, binding) {
     expireAt: binding.expireAt || '',
     trafficLimitGb: Number(binding.trafficLimitGb || node.trafficLimitGb || 0),
     status: customer.status === 'disabled' || binding.status === 'disabled' || node.status === 'disabled' ? 'disabled' : 'active',
+    resetTraffic: Boolean(binding.resetTraffic),
     xuiServerId: node.xuiServerId,
     inboundId: node.inboundId,
     autoCreateInbound: node.autoCreateInbound,
@@ -2001,6 +2009,8 @@ function publicCustomerNode(db, customer, binding) {
     trafficLimitGb: Number(binding.trafficLimitGb || node.trafficLimitGb || 0),
     expireAt: binding.expireAt || '',
     status,
+    disabledReason: binding.disabledReason || '',
+    disabledAt: binding.disabledAt || '',
     hasLink: status === 'active' && Boolean(node.xuiServerId && binding.clientEmail),
     remark: binding.remark || ''
   };
@@ -2088,6 +2098,130 @@ async function syncAllCustomerNodes(db, customer, action = 'upsert') {
     results.push(await syncCustomerNodeToRemote(db, customer, binding, action));
   }
   return results;
+}
+
+async function disableCustomerNodeAndSync(db, customer, binding, reason, detail = {}) {
+  const changedBinding = {
+    ...binding,
+    status: 'disabled',
+    disabledReason: reason,
+    disabledAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  const syncDb = { ...db, customerNodes: db.customerNodes.map((item) => item.id === changedBinding.id ? changedBinding : item) };
+  const logDetail = { reason, customerNodeId: binding.id, warnings: [], ...detail };
+  try {
+    const syncDetail = await syncCustomerNodeToRemote(syncDb, customer, changedBinding, 'disable');
+    logDetail.clientResult = syncDetail.clientResult;
+    logDetail.socksResult = syncDetail.socksResult;
+    logDetail.serviceNodeResult = syncDetail.serviceNodeResult;
+    db.serviceNodes = syncDb.serviceNodes;
+  } catch (error) {
+    const message = `${customer.name || customer.id} / ${binding.name || binding.id}: ${error.message}`;
+    logDetail.warnings.push(message);
+  }
+  const index = db.customerNodes.findIndex((item) => item.id === binding.id);
+  if (index >= 0) db.customerNodes[index] = changedBinding;
+  addLog(db, customer.id, 'status', logDetail.warnings.length ? 'warning' : 'success', detail.message || 'customer node auto disabled', logDetail);
+  return { binding: changedBinding, warnings: logDetail.warnings };
+}
+
+async function disableExpiredCustomerNodes(db) {
+  let count = 0;
+  const warnings = [];
+  const changedBindings = [];
+  const now = new Date();
+  for (const binding of db.customerNodes) {
+    if (binding.status === 'disabled' || !binding.expireAt || new Date(binding.expireAt) >= now) continue;
+    const customer = db.customers.find((item) => item.id === binding.customerId);
+    if (!customer) continue;
+    const result = await disableCustomerNodeAndSync(db, customer, binding, 'expired', { message: 'customer node expired' });
+    changedBindings.push(result.binding);
+    warnings.push(...result.warnings);
+    count += 1;
+  }
+  return { count, changedBindings, warnings };
+}
+
+async function disableRemoteLimitedCustomerNodes(db) {
+  let count = 0;
+  const warnings = [];
+  const changedBindings = [];
+  const serverClientCache = new Map();
+  for (const binding of db.customerNodes) {
+    if (binding.status === 'disabled' || !binding.clientEmail) continue;
+    const customer = db.customers.find((item) => item.id === binding.customerId);
+    if (!customer || customer.status === 'disabled') continue;
+    const node = db.serviceNodes.find((item) => item.id === binding.nodeId);
+    if (!node || node.status === 'disabled') continue;
+    const server = db.xuiServers.find((item) => item.id === node.xuiServerId);
+    if (!server) continue;
+    try {
+      if (!serverClientCache.has(server.id)) {
+        const inbounds = await listXuiInboundsFull(server);
+        const index = clientIndexesFromInbounds(inbounds.items);
+        serverClientCache.set(server.id, index.byEmail);
+      }
+      const remote = serverClientCache.get(server.id).get(binding.clientEmail) || await getXuiClientDetail(server, binding.clientEmail);
+      const remoteClient = remote.client || remote;
+      if (!remote.exists && !remoteClient) continue;
+      const reason = clientTrafficExceeded(remoteClient) ? 'traffic_exceeded' : remoteClient.enable === false ? 'remote_disabled' : '';
+      if (!['traffic_exceeded', 'remote_disabled'].includes(reason)) continue;
+      const result = await disableCustomerNodeAndSync(db, customer, binding, reason, {
+        message: reason === 'traffic_exceeded' ? 'customer node traffic exceeded' : 'customer node remote disabled',
+        remote: {
+          enable: remoteClient.enable,
+          usedBytes: clientTrafficUsedBytes(remoteClient),
+          limitBytes: clientTrafficLimitBytes(remoteClient)
+        }
+      });
+      changedBindings.push(result.binding);
+      warnings.push(...result.warnings);
+      count += 1;
+    } catch (error) {
+      warnings.push(`${customer.name || customer.id} / ${binding.name || binding.id}: ${error.message}`);
+    }
+  }
+  return { count, changedBindings, warnings };
+}
+
+async function runCustomerNodeMaintenance({ remote = true } = {}) {
+  if (setupRequired || !mysqlPool) return { skipped: true, count: 0, warnings: [] };
+  return withWriteLock(() => runCustomerNodeMaintenanceUnlocked({ remote }));
+}
+
+async function runCustomerNodeMaintenanceUnlocked({ remote = true } = {}) {
+  if (setupRequired || !mysqlPool) return { skipped: true, count: 0, warnings: [] };
+  const db = await readDb();
+  const expired = await disableExpiredCustomerNodes(db);
+  const remoteLimited = remote ? await disableRemoteLimitedCustomerNodes(db) : { count: 0, changedBindings: [], warnings: [] };
+  const changed = [...expired.changedBindings, ...remoteLimited.changedBindings];
+  const uniqueChanged = [...new Map(changed.map((binding) => [binding.id, binding])).values()];
+  const count = expired.count + remoteLimited.count;
+  const warnings = [...expired.warnings, ...remoteLimited.warnings];
+  const logs = count > 0 ? db.syncLogs.slice(-count) : [];
+  await mysqlTransaction(async (connection) => {
+    for (const binding of uniqueChanged) await upsertMysqlCustomerNodeRow(connection, binding);
+    for (const log of logs) await insertMysqlLog(connection, log);
+  });
+  return { count, expired, remoteLimited, warnings };
+}
+
+function startCustomerNodeMaintenance() {
+  if (maintenanceTimer) return;
+  maintenanceTimer = setInterval(async () => {
+    if (maintenanceRunning) return;
+    maintenanceRunning = true;
+    try {
+      const result = await runCustomerNodeMaintenance({ remote: true });
+      if (result?.count || result?.warnings?.length) console.log(`customer node maintenance: disabled ${result.count || 0}, warnings ${result.warnings?.length || 0}`);
+    } catch (error) {
+      console.warn(`customer node maintenance failed: ${error.message}`);
+    } finally {
+      maintenanceRunning = false;
+    }
+  }, NODE_MAINTENANCE_INTERVAL_MS);
+  maintenanceTimer.unref();
 }
 
 function validateServiceNode(node) {
@@ -2556,6 +2690,8 @@ function normalizeCustomerNode(input, existing = {}) {
     expireAt: textValue(input, existing, 'expireAt') || addMonths(null, 1),
     trafficLimitGb: Math.max(0, numberValue(input, existing, 'trafficLimitGb', 0)),
     status: textValue(input, existing, 'status', 'active') === 'disabled' ? 'disabled' : 'active',
+    disabledReason: textValue(input, existing, 'disabledReason'),
+    disabledAt: textValue(input, existing, 'disabledAt'),
     remark: textValue(input, existing, 'remark'),
     updatedAt: nowIso(),
     createdAt: existing.createdAt || input.createdAt || nowIso()
@@ -3110,7 +3246,8 @@ async function getXuiClientDetail(server, email) {
     const explicitObj = parseMaybeJson(result.data?.obj) ?? result.data?.obj;
     if (Object.prototype.hasOwnProperty.call(result.data || {}, 'obj') && !explicitObj) return { exists: false, client: null, inboundIds: [], raw: result.data };
     const object = explicitObj && typeof explicitObj === 'object' ? explicitObj : xuiObject(result.data);
-    const client = object.client || object;
+    const stat = object.clientStats || object.client_stat || object.stat || object.stats || {};
+    const client = { ...(stat && typeof stat === 'object' ? stat : {}), ...(object.client || object) };
     const inboundIds = inboundIdsOfClient(object).length ? inboundIdsOfClient(object) : inboundIdsOfClient(client);
     if (object && Object.keys(object).length && clientEmailOf(client)) return { exists: true, client, inboundIds, raw: result.data };
     return { exists: false, client: null, inboundIds: [], raw: result.data };
@@ -3209,6 +3346,34 @@ function trafficGbFromClient(client) {
   return Math.round((bytes / 1024 / 1024 / 1024) * 100) / 100;
 }
 
+function clientTrafficLimitBytes(client) {
+  const value = Number(client?.totalGB || client?.total || client?.totalBytes || client?.limitBytes || 0);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function clientTrafficUsedBytes(client) {
+  const direct = [client?.used, client?.usedTraffic, client?.usedTrafficBytes, client?.usedBytes, client?.totalUsed];
+  for (const value of direct) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  const sum = Number(client?.up || 0) + Number(client?.down || 0);
+  if (Number.isFinite(sum) && sum > 0) return sum;
+  const stats = client?.clientStats || client?.stat || client?.stats || client?.traffic || {};
+  if (stats && typeof stats === 'object' && stats !== client) return clientTrafficUsedBytes(stats);
+  return 0;
+}
+
+function clientTrafficExceeded(client) {
+  const limit = clientTrafficLimitBytes(client);
+  if (!limit) return false;
+  return clientTrafficUsedBytes(client) >= limit;
+}
+
+function autoDisabledReason(reason) {
+  return ['expired', 'traffic_exceeded'].includes(String(reason || '').trim());
+}
+
 function inboundSettingsOf(inbound) {
   const parsed = parseMaybeJson(inbound?.settings);
   return parsed && typeof parsed === 'object' ? parsed : inbound?.settings && typeof inbound.settings === 'object' ? inbound.settings : {};
@@ -3217,9 +3382,11 @@ function inboundSettingsOf(inbound) {
 function clientsFromInbound(inbound) {
   const settings = inboundSettingsOf(inbound);
   const clients = Array.isArray(settings.clients) ? settings.clients : Array.isArray(inbound?.clients) ? inbound.clients : [];
+  const stats = Array.isArray(inbound?.clientStats) ? inbound.clientStats : Array.isArray(inbound?.client_stats) ? inbound.client_stats : [];
+  const statsByEmail = new Map(stats.map((stat) => [clientEmailOf(stat), stat]).filter(([email]) => email));
   const inboundId = inboundIdOf(inbound);
   return clients.map((client) => ({
-    client: { ...client, protocol: inbound?.protocol || client.protocol },
+    client: { ...(statsByEmail.get(clientEmailOf(client)) || {}), ...client, protocol: inbound?.protocol || client.protocol },
     inboundIds: inboundId ? [inboundId] : [],
     inbound
   }));
@@ -3747,7 +3914,7 @@ async function syncClientToXui(db, customer, action = 'upsert') {
     flow: '',
     tgId: 0,
     subId: customer.clientId || customer.clientEmail,
-    reset: 0
+    reset: customer.resetTraffic ? 1 : 0
   };
 
   const clientDetail = await getXuiClientDetail(server, customer.clientEmail);
@@ -3787,13 +3954,24 @@ async function syncClientToXui(db, customer, action = 'upsert') {
   for (const route of paths) {
     try {
       const result = await xuiRequest(server, route.endpoint, { method: 'POST', body: route.body });
-      return { action: exists ? 'update' : 'add', endpoint: route.endpoint, inboundIds, clientEmail: customer.clientEmail, createdInbound, result: result.data };
+      const resetTrafficResult = customer.resetTraffic && action !== 'disable'
+        ? await resetXuiClientTraffic(server, customer.clientEmail)
+        : null;
+      return { action: exists ? 'update' : 'add', endpoint: route.endpoint, inboundIds, clientEmail: customer.clientEmail, createdInbound, resetTrafficResult, result: result.data };
     } catch (error) {
       lastError = error;
       errors.push(`${route.endpoint}: ${error.message}`);
     }
   }
   throw new Error(`同步用户到 3x-ui 失败，已尝试：${errors.join(' | ') || lastError?.message || '无详细错误'}`);
+}
+
+async function resetXuiClientTraffic(server, email) {
+  if (!email) return { skipped: true, reason: 'missing-email' };
+  const encoded = encodeURIComponent(email);
+  const endpoint = withApiPrefix(server, `/panel/api/clients/resetTraffic/${encoded}`);
+  const result = await xuiRequest(server, endpoint, { method: 'POST' });
+  return { reset: true, endpoint, clientEmail: email, result: result.data };
 }
 
 async function syncSocksToXui(db, customer) {
@@ -4484,6 +4662,7 @@ async function routeApiUnlocked(req, res, url) {
       await initMysqlStorage();
       await writeRuntimeConfig(nextConfig);
       setupRequired = false;
+      startCustomerNodeMaintenance();
       if (previousPool && previousPool !== mysqlPool) await previousPool.end().catch(() => {});
       return send(res, 200, { ok: true, message: '数据库连接成功，安装完成' });
     } catch (error) {
@@ -5284,12 +5463,14 @@ async function routeApiUnlocked(req, res, url) {
     if (!serviceNode) return sendError(res, 404, '服务节点不存在');
     const months = Math.max(1, Math.floor(Number(body.months || 1)));
     const oldExpireAt = binding.expireAt;
-    const changedBinding = { ...binding, expireAt: addMonths(binding.expireAt, months), status: 'active', updatedAt: nowIso() };
+    const shouldResetTraffic = binding.disabledReason === 'traffic_exceeded';
+    const changedBinding = { ...binding, expireAt: addMonths(binding.expireAt, months), status: 'active', disabledReason: '', disabledAt: '', resetTraffic: shouldResetTraffic, updatedAt: nowIso() };
     const syncDb = { ...db, customerNodes: db.customerNodes.map((item) => item.id === changedBinding.id ? changedBinding : item) };
     try {
       const detail = await syncCustomerNodeToRemote(syncDb, customer, changedBinding, 'upsert');
       db.serviceNodes = syncDb.serviceNodes;
       const index = db.customerNodes.findIndex((item) => item.id === binding.id);
+      delete changedBinding.resetTraffic;
       db.customerNodes[index] = changedBinding;
       addRenewalLog(db, customer, months, 0, oldExpireAt, changedBinding.expireAt, 'admin', 'success', `管理员续费 ${changedBinding.name || serviceNode.name || '节点'} ${months} 个月`, { customerNodeId: binding.id, serviceNodeId: binding.nodeId, oldExpireAt, newExpireAt: changedBinding.expireAt, ...detail });
       addLog(db, customer.id, 'renew', 'success', `已续费用户节点 ${months} 个月`, { customerNodeId: binding.id, serviceNodeId: binding.nodeId, oldExpireAt, newExpireAt: changedBinding.expireAt, ...detail });
@@ -5384,6 +5565,12 @@ async function routeApiUnlocked(req, res, url) {
   }
 
   if (url.pathname === '/api/maintenance/disable-expired' && req.method === 'POST') {
+    try {
+      const detail = await runCustomerNodeMaintenanceUnlocked({ remote: false });
+      return send(res, 200, { ok: true, count: detail.count || 0, data: publicDb(await readDb()), detail, warning: (detail.warnings || []).join('; ') });
+    } catch (error) {
+      return sendError(res, error.statusCode || 500, 'maintenance failed', error.message);
+    }
     let count = 0;
     const warnings = [];
     const changedBindings = [];
@@ -5507,6 +5694,7 @@ server.keepAliveTimeout = 5 * 1000;
 
 await initStorage();
 await initSessionStore();
+if (!setupRequired) startCustomerNodeMaintenance();
 
 server.listen(PORT, () => {
   console.log(`十夜管理系统 listening on http://127.0.0.1:${PORT}`);
