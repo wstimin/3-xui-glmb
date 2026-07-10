@@ -42,7 +42,9 @@ export const xuiServerUpsertSchema = z.object({
 export const serviceNodeUpsertSchema = z.object({
   name: z.string().trim().min(1).max(100),
   serverId: z.string().min(1),
+  remoteMode: z.enum(['create', 'bind']).default('create'),
   inboundId: z.coerce.number().int().optional(),
+  inboundPort: z.coerce.number().int().min(1).max(65535).optional(),
   protocol: serviceNodeProtocolSchema.default('vless'),
   encryption: serviceNodeEncryptionSchema.default('none'),
   socksRelayEnabled: z.boolean().default(false),

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { BadGatewayException, BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, type AccountStatus } from '@prisma/client';
 import { xuiServerUpsertSchema } from '@shiye/shared';
@@ -28,6 +28,21 @@ type ServiceNodeConfig = {
   encryption?: string;
   socksRelayEnabled?: boolean;
   socksNodeId?: string | null;
+  remoteMode?: 'create' | 'bind';
+  remoteManaged?: boolean;
+  remoteInboundTag?: string;
+  remoteInboundRemark?: string;
+  remoteInboundPort?: number;
+};
+
+type CreateServiceInboundInput = {
+  serverId: string;
+  name: string;
+  protocol: string;
+  encryption?: string;
+  enabled: boolean;
+  port?: number;
+  remark?: string | null;
 };
 
 const SHIYE_ROUTE_MARK = 'shiye-service-node';
@@ -147,6 +162,87 @@ export class XuiService {
       response: this.toJsonValue(response)
     });
     return { synced: true, action, serviceNodeId, inboundId: serviceNode.inboundId, inboundTag, outboundTag, socks: socksDetail };
+  }
+
+  async createServiceNodeInbound(input: CreateServiceInboundInput) {
+    const server = await this.prisma.xuiServer.findUnique({ where: { id: input.serverId } });
+    if (!server) throw new NotFoundException('3x-ui 服务器不存在');
+    if (!server.enabled) throw new BadRequestException('3x-ui 服务器已停用');
+
+    const client = await this.createAuthenticatedClient(server);
+    const rawInbounds = await client.listInbounds();
+    this.assertXuiSuccess(rawInbounds);
+    const inbounds = this.xuiArray(rawInbounds);
+    const usedPorts = new Set(inbounds.map((item) => Number(this.xuiObject(item).port)).filter((port) => Number.isInteger(port) && port > 0));
+    const port = input.port || this.pickInboundPort(usedPorts);
+    if (usedPorts.has(port)) throw new BadRequestException(`3x-ui 入站端口 ${port} 已被占用`);
+
+    const tag = this.serviceInboundTag();
+    const payload = this.buildInboundPayload({ ...input, port, tag });
+    const response = await client.addInbound(payload);
+    this.assertXuiSuccess(response);
+
+    let inboundId = this.extractCreatedInboundId(response);
+    if (!inboundId) {
+      const afterPayload = await client.listInbounds();
+      this.assertXuiSuccess(afterPayload);
+      const created = this.xuiArray(afterPayload).find((item) => {
+        const inbound = this.xuiObject(item);
+        return inbound.tag === tag || (inbound.remark === payload.remark && Number(inbound.port) === port);
+      });
+      inboundId = this.inboundIdOf(created);
+    }
+
+    if (!inboundId) throw new BadGatewayException('3x-ui 已返回成功，但没有返回新入站 ID');
+    await this.writeSyncLog(server.id, 'service-node-inbound-create', 'success', `Created inbound ${inboundId} for ${input.name}`, {
+      inboundId,
+      port,
+      protocol: input.protocol,
+      tag,
+      response: this.toJsonValue(response)
+    });
+    return { inboundId, port, tag, remark: String(payload.remark), response };
+  }
+
+  async validateServiceNodeInbound(serverId: string, inboundId: number) {
+    const server = await this.prisma.xuiServer.findUnique({ where: { id: serverId } });
+    if (!server) throw new NotFoundException('3x-ui 服务器不存在');
+    const client = await this.createAuthenticatedClient(server);
+    const payload = await client.getInbound(inboundId);
+    this.assertXuiSuccess(payload);
+    return { inboundId, valid: true };
+  }
+
+  async deleteManagedServiceNodeInbound(serviceNodeId: string) {
+    const serviceNode = await this.prisma.serviceNode.findUnique({ where: { id: serviceNodeId }, include: { server: true } });
+    if (!serviceNode?.inboundId) return { deleted: false, skipped: true };
+    const config = this.xuiObject(serviceNode.config) as ServiceNodeConfig;
+    if (!config.remoteManaged) return { deleted: false, skipped: true };
+
+    try {
+      const client = await this.createAuthenticatedClient(serviceNode.server);
+      const response = await client.deleteInbound(serviceNode.inboundId);
+      this.assertXuiSuccess(response);
+      await this.writeSyncLog(serviceNode.serverId, 'service-node-inbound-delete', 'success', `Deleted inbound ${serviceNode.inboundId}`, {
+        serviceNodeId,
+        inboundId: serviceNode.inboundId,
+        response: this.toJsonValue(response)
+      });
+      return { deleted: true, inboundId: serviceNode.inboundId, response };
+    } catch (error) {
+      if (/not found|record not found|404/i.test(this.errorMessage(error))) return { deleted: true, inboundId: serviceNode.inboundId, alreadyAbsent: true };
+      await this.writeSyncLog(serviceNode.serverId, 'service-node-inbound-delete', 'failed', this.errorMessage(error), { serviceNodeId, inboundId: serviceNode.inboundId });
+      throw new BadGatewayException(`删除远端 3x-ui 入站失败：${this.errorMessage(error)}`);
+    }
+  }
+
+  async deleteRemoteInbound(serverId: string, inboundId: number) {
+    const server = await this.prisma.xuiServer.findUnique({ where: { id: serverId } });
+    if (!server) return { deleted: false, skipped: true };
+    const client = await this.createAuthenticatedClient(server);
+    const response = await client.deleteInbound(inboundId);
+    this.assertXuiSuccess(response);
+    return { deleted: true, inboundId, response };
   }
 
   async syncServer(serverId: string) {
@@ -371,6 +467,58 @@ export class XuiService {
     };
   }
 
+  private buildInboundPayload(input: CreateServiceInboundInput & { port: number; tag: string }) {
+    const protocol = input.protocol;
+    const remark = input.remark || input.name;
+    return {
+      up: 0,
+      down: 0,
+      total: 0,
+      remark,
+      enable: input.enabled,
+      expiryTime: 0,
+      listen: '',
+      port: input.port,
+      protocol,
+      settings: this.defaultInboundSettings(protocol, input.encryption),
+      streamSettings: this.defaultStreamSettings(),
+      sniffing: {
+        enabled: true,
+        destOverride: ['http', 'tls', 'quic', 'fakedns'],
+        metadataOnly: false,
+        routeOnly: false
+      },
+      tag: input.tag,
+      _shiyeManaged: true
+    };
+  }
+
+  private defaultInboundSettings(protocol: string, encryption = 'none') {
+    if (protocol === 'vless') return { clients: [], decryption: 'none', fallbacks: [] };
+    if (protocol === 'vmess') return { clients: [] };
+    if (protocol === 'trojan') return { clients: [], fallbacks: [] };
+    if (protocol === 'shadowsocks') {
+      return {
+        method: encryption && encryption !== 'none' && encryption !== 'auto' ? encryption : 'aes-128-gcm',
+        password: this.randomSecret(16),
+        network: 'tcp,udp',
+        clients: []
+      };
+    }
+    if (protocol === 'socks') return { auth: 'noauth', accounts: [], udp: true, ip: '127.0.0.1' };
+    if (protocol === 'http') return { accounts: [] };
+    if (protocol === 'mixed') return { auth: 'noauth', accounts: [], udp: true, ip: '127.0.0.1' };
+    return { clients: [] };
+  }
+
+  private defaultStreamSettings() {
+    return {
+      network: 'tcp',
+      security: 'none',
+      tcpSettings: { acceptProxyProtocol: false, header: { type: 'none' } }
+    };
+  }
+
   private async linksForClient(client: XuiClient, email: string) {
     const payload = await client.clientLinks(email);
     this.assertXuiSuccess(payload);
@@ -506,6 +654,37 @@ export class XuiService {
 
   private subscriptionId(uuid: string) {
     return uuid.replace(/-/g, '').slice(0, 16);
+  }
+
+  private serviceInboundTag() {
+    return `shiye-inbound-${randomUUID().replace(/-/g, '').slice(0, 18)}`;
+  }
+
+  private pickInboundPort(usedPorts: Set<number>) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const port = 20000 + Math.floor(Math.random() * 30000);
+      if (!usedPorts.has(port)) return port;
+    }
+    for (let port = 20000; port <= 50000; port += 1) {
+      if (!usedPorts.has(port)) return port;
+    }
+    throw new BadRequestException('没有可用的 3x-ui 入站端口');
+  }
+
+  private extractCreatedInboundId(payload: unknown) {
+    const direct = this.inboundIdOf(payload);
+    if (direct) return direct;
+    const object = this.xuiObject(payload);
+    for (const key of ['obj', 'data', 'result', 'inbound']) {
+      const value = object[key];
+      const id = this.inboundIdOf(value);
+      if (id) return id;
+    }
+    return 0;
+  }
+
+  private randomSecret(bytes = 24) {
+    return randomBytes(bytes).toString('base64url');
   }
 
   private async writeSyncLog(serverId: string | null, action: string, status: string, message: string, detail: unknown) {

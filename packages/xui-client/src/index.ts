@@ -89,8 +89,16 @@ export class XuiClient {
     return this.request(`/panel/api/inbounds/get/${encodeURIComponent(String(id))}`);
   }
 
+  addInbound(body: unknown) {
+    return this.request('/panel/api/inbounds/add', { method: 'POST', body });
+  }
+
   updateInbound(id: number, body: unknown) {
     return this.request(`/panel/api/inbounds/update/${encodeURIComponent(String(id))}`, { method: 'POST', body });
+  }
+
+  deleteInbound(id: number) {
+    return this.request(`/panel/api/inbounds/del/${encodeURIComponent(String(id))}`, { method: 'POST' });
   }
 
   addClient(body: unknown) {

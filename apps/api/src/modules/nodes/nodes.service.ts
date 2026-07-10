@@ -10,6 +10,11 @@ type ServiceNodeConfig = {
   encryption?: string;
   socksRelayEnabled?: boolean;
   socksNodeId?: string | null;
+  remoteMode?: 'create' | 'bind';
+  remoteManaged?: boolean;
+  remoteInboundTag?: string;
+  remoteInboundRemark?: string;
+  remoteInboundPort?: number;
 };
 
 @Injectable()
@@ -70,48 +75,121 @@ export class NodesService {
 
   async createServiceNode(input: z.infer<typeof serviceNodeUpsertSchema>) {
     await this.ensureServer(input.serverId);
-    const config = await this.serviceNodeConfig(input);
-    return this.prisma.serviceNode.create({
-      data: {
+    const remoteMode = input.remoteMode || 'create';
+    let inboundId = input.inboundId || null;
+    let remoteCreated: { inboundId: number; port: number; tag: string; remark: string } | null = null;
+
+    if (remoteMode === 'bind') {
+      if (!inboundId) throw new BadRequestException('绑定已有入站时必须填写入站 ID');
+      await this.xui.validateServiceNodeInbound(input.serverId, inboundId);
+    } else {
+      remoteCreated = await this.xui.createServiceNodeInbound({
         serverId: input.serverId,
         name: input.name,
-        inboundId: input.inboundId || null,
         protocol: input.protocol,
-        config: this.toJsonValue(config),
-        priceMonthly: new Prisma.Decimal(input.priceMonthly),
-        trafficLimitGb: new Prisma.Decimal(input.trafficLimitGb),
+        encryption: input.encryption,
         enabled: input.enabled,
+        port: input.inboundPort,
         remark: input.remark || null
-      },
-      include: { server: { select: { id: true, name: true, baseUrl: true, enabled: true } } }
-    });
+      });
+      inboundId = remoteCreated.inboundId;
+    }
+
+    const config = await this.serviceNodeConfig(input, null, remoteCreated ? {
+      remoteMode,
+      remoteManaged: true,
+      remoteInboundTag: remoteCreated.tag,
+      remoteInboundRemark: remoteCreated.remark,
+      remoteInboundPort: remoteCreated.port
+    } : { remoteMode, remoteManaged: false, remoteInboundPort: input.inboundPort });
+
+    try {
+      const node = await this.prisma.serviceNode.create({
+        data: {
+          serverId: input.serverId,
+          name: input.name,
+          inboundId,
+          protocol: input.protocol,
+          config: this.toJsonValue(config),
+          priceMonthly: new Prisma.Decimal(input.priceMonthly),
+          trafficLimitGb: new Prisma.Decimal(input.trafficLimitGb),
+          enabled: input.enabled,
+          remark: input.remark || null
+        },
+        include: { server: { select: { id: true, name: true, baseUrl: true, enabled: true } } }
+      });
+      if (config.socksRelayEnabled) await this.xui.syncServiceNodeRemoteConfig(node.id);
+      return node;
+    } catch (error) {
+      if (remoteCreated) await this.xui.deleteRemoteInbound(input.serverId, remoteCreated.inboundId).catch(() => undefined);
+      throw error;
+    }
   }
 
   async updateServiceNode(id: string, input: Partial<z.infer<typeof serviceNodeUpsertSchema>>) {
     const current = await this.ensureServiceNode(id);
     if (input.serverId) await this.ensureServer(input.serverId);
-    const config = await this.serviceNodeConfig(input, current.config);
-    return this.prisma.serviceNode.update({
-      where: { id },
-      data: {
-        serverId: input.serverId,
-        name: input.name,
-        inboundId: input.inboundId === undefined ? undefined : input.inboundId || null,
-        protocol: input.protocol,
-        config: this.toJsonValue(config),
-        priceMonthly: input.priceMonthly === undefined ? undefined : new Prisma.Decimal(input.priceMonthly),
-        trafficLimitGb: input.trafficLimitGb === undefined ? undefined : new Prisma.Decimal(input.trafficLimitGb),
-        enabled: input.enabled,
-        remark: input.remark === undefined ? undefined : input.remark || null
-      },
-      include: { server: { select: { id: true, name: true, baseUrl: true, enabled: true } } }
-    });
+    const nextServerId = input.serverId || current.serverId;
+    const previousConfig = jsonObject(current.config) as ServiceNodeConfig;
+    const remoteMode = input.remoteMode || previousConfig.remoteMode || (current.inboundId ? 'bind' : 'create');
+    let inboundId = input.inboundId === undefined ? current.inboundId : input.inboundId || null;
+    let remoteCreated: { inboundId: number; port: number; tag: string; remark: string } | null = null;
+
+    if (remoteMode === 'bind') {
+      if (!inboundId) throw new BadRequestException('绑定已有入站时必须填写入站 ID');
+      if (input.serverId || input.inboundId !== undefined) await this.xui.validateServiceNodeInbound(nextServerId, inboundId);
+    } else if (!inboundId) {
+      remoteCreated = await this.xui.createServiceNodeInbound({
+        serverId: nextServerId,
+        name: input.name || current.name,
+        protocol: input.protocol || current.protocol,
+        encryption: input.encryption || previousConfig.encryption || 'none',
+        enabled: input.enabled ?? current.enabled,
+        port: input.inboundPort,
+        remark: input.remark === undefined ? current.remark : input.remark || null
+      });
+      inboundId = remoteCreated.inboundId;
+    }
+
+    const remotePatch = remoteCreated ? {
+      remoteMode,
+      remoteManaged: true,
+      remoteInboundTag: remoteCreated.tag,
+      remoteInboundRemark: remoteCreated.remark,
+      remoteInboundPort: remoteCreated.port
+    } : {
+      remoteMode,
+      remoteManaged: remoteMode === 'create' ? Boolean(previousConfig.remoteManaged) : false,
+      remoteInboundPort: input.inboundPort === undefined ? previousConfig.remoteInboundPort : input.inboundPort
+    };
+    const config = await this.serviceNodeConfig(input, current.config, remotePatch);
+    try {
+      return await this.prisma.serviceNode.update({
+        where: { id },
+        data: {
+          serverId: input.serverId,
+          name: input.name,
+          inboundId,
+          protocol: input.protocol,
+          config: this.toJsonValue(config),
+          priceMonthly: input.priceMonthly === undefined ? undefined : new Prisma.Decimal(input.priceMonthly),
+          trafficLimitGb: input.trafficLimitGb === undefined ? undefined : new Prisma.Decimal(input.trafficLimitGb),
+          enabled: input.enabled,
+          remark: input.remark === undefined ? undefined : input.remark || null
+        },
+        include: { server: { select: { id: true, name: true, baseUrl: true, enabled: true } } }
+      });
+    } catch (error) {
+      if (remoteCreated) await this.xui.deleteRemoteInbound(nextServerId, remoteCreated.inboundId).catch(() => undefined);
+      throw error;
+    }
   }
 
   async deleteServiceNode(id: string) {
     const current = await this.ensureServiceNode(id);
     await this.xui.deleteServiceNodeClients(id);
     if (current.inboundId) await this.xui.syncServiceNodeRemoteConfig(id, { removeOnly: true });
+    await this.xui.deleteManagedServiceNodeInbound(id);
     await this.prisma.$transaction([
       this.prisma.customerNode.deleteMany({ where: { serviceNodeId: id } }),
       this.prisma.serviceNode.delete({ where: { id } })
@@ -266,7 +344,7 @@ export class NodesService {
   }
 
   private async ensureServiceNode(id: string) {
-    const exists = await this.prisma.serviceNode.findUnique({ where: { id }, select: { id: true, inboundId: true, config: true } });
+    const exists = await this.prisma.serviceNode.findUnique({ where: { id }, select: { id: true, serverId: true, name: true, protocol: true, inboundId: true, enabled: true, remark: true, config: true } });
     if (!exists) throw new NotFoundException('Service node not found');
     return exists;
   }
@@ -276,10 +354,11 @@ export class NodesService {
     if (!exists) throw new NotFoundException('Socks node not found');
   }
 
-  private async serviceNodeConfig(input: Partial<z.infer<typeof serviceNodeUpsertSchema>>, current?: Prisma.JsonValue | null): Promise<ServiceNodeConfig> {
+  private async serviceNodeConfig(input: Partial<z.infer<typeof serviceNodeUpsertSchema>>, current?: Prisma.JsonValue | null, remotePatch: Partial<ServiceNodeConfig> = {}): Promise<ServiceNodeConfig> {
     const previous = jsonObject(current) as ServiceNodeConfig;
     const next: ServiceNodeConfig = {
       ...previous,
+      ...remotePatch,
       encryption: input.encryption === undefined ? previous.encryption || 'none' : input.encryption,
       socksRelayEnabled: input.socksRelayEnabled === undefined ? Boolean(previous.socksRelayEnabled) : input.socksRelayEnabled,
       socksNodeId: input.socksNodeId === undefined ? previous.socksNodeId || null : input.socksNodeId || null

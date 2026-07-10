@@ -6,7 +6,14 @@ import { api } from '../api';
 
 type XuiServer = { id: string; name: string; baseUrl: string; enabled: boolean };
 type SocksNode = { id: string; name: string; host: string; port: number; enabled: boolean };
-type ServiceNodeConfig = { encryption?: string; socksRelayEnabled?: boolean; socksNodeId?: string | null };
+type ServiceNodeConfig = {
+  encryption?: string;
+  socksRelayEnabled?: boolean;
+  socksNodeId?: string | null;
+  remoteMode?: 'create' | 'bind';
+  remoteManaged?: boolean;
+  remoteInboundPort?: number;
+};
 type ServiceNode = {
   id: string;
   serverId: string;
@@ -58,7 +65,9 @@ const dialogVisible = ref(false);
 const form = reactive({
   name: '',
   serverId: '',
+  remoteMode: 'create' as 'create' | 'bind',
   inboundId: undefined as number | undefined,
+  inboundPort: undefined as number | undefined,
   protocol: 'vless',
   encryption: 'none',
   priceMonthly: 0,
@@ -152,7 +161,9 @@ function editNode(node: ServiceNode) {
   Object.assign(form, {
     name: node.name,
     serverId: node.serverId,
+    remoteMode: config.remoteMode || (config.remoteManaged ? 'create' : 'bind'),
     inboundId: node.inboundId ?? undefined,
+    inboundPort: config.remoteInboundPort ?? undefined,
     protocol: node.protocol || 'vless',
     encryption: config.encryption || 'none',
     priceMonthly: Number(node.priceMonthly),
@@ -177,7 +188,9 @@ function resetForm() {
   Object.assign(form, {
     name: '',
     serverId: servers.value[0]?.id || '',
+    remoteMode: 'create',
     inboundId: undefined,
+    inboundPort: undefined,
     protocol: 'vless',
     encryption: 'none',
     priceMonthly: 0,
@@ -192,6 +205,10 @@ function resetForm() {
 function socksLabel(id?: string | null) {
   const node = socksNodes.value.find((item) => item.id === id);
   return node ? `${node.name} (${node.host}:${node.port})` : '-';
+}
+
+function remoteModeLabel(node: ServiceNode) {
+  return node.config?.remoteManaged ? '自动创建' : '绑定已有';
 }
 
 onMounted(loadNodes);
@@ -215,6 +232,9 @@ onMounted(loadNodes);
         <template #default="{ row }: { row: ServiceNode }">{{ row.server?.name || '-' }}</template>
       </el-table-column>
       <el-table-column prop="inboundId" label="入站 ID" width="100" />
+      <el-table-column label="远端方式" width="110">
+        <template #default="{ row }: { row: ServiceNode }"><el-tag :type="row.config?.remoteManaged ? 'success' : 'info'">{{ remoteModeLabel(row) }}</el-tag></template>
+      </el-table-column>
       <el-table-column prop="protocol" label="节点类型" width="110" />
       <el-table-column label="加密" width="190">
         <template #default="{ row }: { row: ServiceNode }">{{ row.config?.encryption || 'none' }}</template>
@@ -249,7 +269,13 @@ onMounted(loadNodes);
           <el-option v-for="server in servers" :key="server.id" :label="server.name" :value="server.id" />
         </el-select>
       </el-form-item>
-      <el-form-item label="入站 ID"><el-input-number v-model="form.inboundId" :min="0" style="width: 100%" /></el-form-item>
+      <el-form-item label="远端入站">
+        <el-segmented v-model="form.remoteMode" :options="[{ label: '自动创建', value: 'create' }, { label: '绑定已有', value: 'bind' }]" />
+      </el-form-item>
+      <el-form-item v-if="form.remoteMode === 'bind'" label="入站 ID"><el-input-number v-model="form.inboundId" :min="1" style="width: 100%" /></el-form-item>
+      <el-form-item v-else label="端口">
+        <el-input-number v-model="form.inboundPort" :min="1" :max="65535" placeholder="自动分配" style="width: 100%" />
+      </el-form-item>
       <el-form-item label="节点类型">
         <el-select v-model="form.protocol" style="width: 100%">
           <el-option v-for="item in protocolOptions" :key="item.value" :label="item.label" :value="item.value" />
@@ -273,7 +299,7 @@ onMounted(loadNodes);
     </el-form>
     <template #footer>
       <el-button @click="dialogVisible = false">取消</el-button>
-      <el-button type="primary" :loading="saving" :disabled="!form.name || !form.serverId || (form.socksRelayEnabled && !form.socksNodeId)" @click="saveNode">保存</el-button>
+      <el-button type="primary" :loading="saving" :disabled="!form.name || !form.serverId || (form.remoteMode === 'bind' && !form.inboundId) || (form.socksRelayEnabled && !form.socksNodeId)" @click="saveNode">保存</el-button>
     </template>
   </el-dialog>
 </template>
