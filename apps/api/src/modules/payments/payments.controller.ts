@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards } from '@nestjs/common';
 import type { Response } from 'express';
 import { paymentChannelUpsertSchema, rechargeOrderCreateSchema } from '@shiye/shared';
 import type { z } from 'zod';
@@ -28,16 +28,14 @@ export class PaymentsController {
   @Post('admin/payment-channels')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(paymentChannelUpsertSchema))
-  createChannel(@Body() body: z.infer<typeof paymentChannelUpsertSchema>) {
+  createChannel(@Body(new ZodValidationPipe(paymentChannelUpsertSchema)) body: z.infer<typeof paymentChannelUpsertSchema>) {
     return this.payments.createChannel(body);
   }
 
   @Patch('admin/payment-channels/:id')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(paymentChannelUpsertSchema.partial()))
-  updateChannel(@Param('id') id: string, @Body() body: Partial<z.infer<typeof paymentChannelUpsertSchema>>) {
+  updateChannel(@Param('id') id: string, @Body(new ZodValidationPipe(paymentChannelUpsertSchema.partial())) body: Partial<z.infer<typeof paymentChannelUpsertSchema>>) {
     return this.payments.updateChannel(id, body);
   }
 
@@ -51,8 +49,7 @@ export class PaymentsController {
   @Post('user/recharge-orders')
   @UseGuards(AuthGuard)
   @Roles('user')
-  @UsePipes(new ZodValidationPipe(rechargeOrderCreateSchema))
-  createOrder(@Body() body: z.infer<typeof rechargeOrderCreateSchema>, @CurrentUser() user: SessionUser) {
+  createOrder(@Body(new ZodValidationPipe(rechargeOrderCreateSchema)) body: z.infer<typeof rechargeOrderCreateSchema>, @CurrentUser() user: SessionUser) {
     return this.payments.createOrder(user.customerId || '', body);
   }
 

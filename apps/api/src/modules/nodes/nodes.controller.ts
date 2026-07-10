@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { customerNodeCreateSchema, serviceNodeUpsertSchema, xuiServerUpsertSchema } from '@shiye/shared';
 import type { z } from 'zod';
 import { AuthGuard } from '../../shared/auth.guard.js';
@@ -20,14 +20,12 @@ export class NodesController {
   @Post('admin/xui-servers')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(xuiServerUpsertSchema))
-  createServer(@Body() body: z.infer<typeof xuiServerUpsertSchema>) { return this.nodes.createServer(body); }
+  createServer(@Body(new ZodValidationPipe(xuiServerUpsertSchema)) body: z.infer<typeof xuiServerUpsertSchema>) { return this.nodes.createServer(body); }
 
   @Patch('admin/xui-servers/:id')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(xuiServerUpsertSchema.partial()))
-  updateServer(@Param('id') id: string, @Body() body: Partial<z.infer<typeof xuiServerUpsertSchema>>) { return this.nodes.updateServer(id, body); }
+  updateServer(@Param('id') id: string, @Body(new ZodValidationPipe(xuiServerUpsertSchema.partial())) body: Partial<z.infer<typeof xuiServerUpsertSchema>>) { return this.nodes.updateServer(id, body); }
 
   @Delete('admin/xui-servers/:id')
   @UseGuards(AuthGuard)
@@ -42,14 +40,12 @@ export class NodesController {
   @Post('admin/service-nodes')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(serviceNodeUpsertSchema))
-  createServiceNode(@Body() body: z.infer<typeof serviceNodeUpsertSchema>) { return this.nodes.createServiceNode(body); }
+  createServiceNode(@Body(new ZodValidationPipe(serviceNodeUpsertSchema)) body: z.infer<typeof serviceNodeUpsertSchema>) { return this.nodes.createServiceNode(body); }
 
   @Patch('admin/service-nodes/:id')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(serviceNodeUpsertSchema.partial()))
-  updateServiceNode(@Param('id') id: string, @Body() body: Partial<z.infer<typeof serviceNodeUpsertSchema>>) { return this.nodes.updateServiceNode(id, body); }
+  updateServiceNode(@Param('id') id: string, @Body(new ZodValidationPipe(serviceNodeUpsertSchema.partial())) body: Partial<z.infer<typeof serviceNodeUpsertSchema>>) { return this.nodes.updateServiceNode(id, body); }
 
   @Delete('admin/service-nodes/:id')
   @UseGuards(AuthGuard)
@@ -64,8 +60,7 @@ export class NodesController {
   @Post('admin/customers/:id/nodes')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(customerNodeCreateSchema))
-  bindCustomerNode(@Param('id') id: string, @Body() body: z.infer<typeof customerNodeCreateSchema>) {
+  bindCustomerNode(@Param('id') id: string, @Body(new ZodValidationPipe(customerNodeCreateSchema)) body: z.infer<typeof customerNodeCreateSchema>) {
     return this.nodes.bindCustomerNode(id, body);
   }
 

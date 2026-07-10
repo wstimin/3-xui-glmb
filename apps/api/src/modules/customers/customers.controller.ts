@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { balanceAdjustSchema, customerUpsertSchema } from '@shiye/shared';
 import type { z } from 'zod';
 import { AuthGuard } from '../../shared/auth.guard.js';
@@ -22,16 +22,14 @@ export class CustomersController {
   @Post('admin/customers')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(customerUpsertSchema))
-  create(@Body() body: z.infer<typeof customerUpsertSchema>) {
+  create(@Body(new ZodValidationPipe(customerUpsertSchema)) body: z.infer<typeof customerUpsertSchema>) {
     return this.customers.create(body);
   }
 
   @Patch('admin/customers/:id')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(customerUpsertSchema.partial()))
-  update(@Param('id') id: string, @Body() body: z.infer<typeof customerUpsertSchema>) {
+  update(@Param('id') id: string, @Body(new ZodValidationPipe(customerUpsertSchema.partial())) body: z.infer<typeof customerUpsertSchema>) {
     return this.customers.update(id, body);
   }
 
@@ -45,8 +43,7 @@ export class CustomersController {
   @Post('admin/customers/:id/balance-adjustments')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(balanceAdjustSchema))
-  adjustBalance(@Param('id') id: string, @Body() body: z.infer<typeof balanceAdjustSchema>, @CurrentUser() user: SessionUser) {
+  adjustBalance(@Param('id') id: string, @Body(new ZodValidationPipe(balanceAdjustSchema)) body: z.infer<typeof balanceAdjustSchema>, @CurrentUser() user: SessionUser) {
     return this.customers.adjustBalance(id, body, user.username);
   }
 

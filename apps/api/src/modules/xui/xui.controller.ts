@@ -1,4 +1,4 @@
-import { Body, Controller, Param, Post, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Param, Post, UseGuards } from '@nestjs/common';
 import { xuiServerUpsertSchema } from '@shiye/shared';
 import type { z } from 'zod';
 import { AuthGuard } from '../../shared/auth.guard.js';
@@ -13,8 +13,7 @@ export class XuiController {
   @Post('admin/xui/test')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(xuiServerUpsertSchema))
-  test(@Body() body: z.infer<typeof xuiServerUpsertSchema>) { return this.xui.testConnection(body); }
+  test(@Body(new ZodValidationPipe(xuiServerUpsertSchema)) body: z.infer<typeof xuiServerUpsertSchema>) { return this.xui.testConnection(body); }
 
   @Post('admin/xui-servers/:id/test')
   @UseGuards(AuthGuard)

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { cardGenerateSchema, cardRedeemSchema, cardTemplateUpsertSchema } from '@shiye/shared';
 import type { z } from 'zod';
 import { AuthGuard } from '../../shared/auth.guard.js';
@@ -25,14 +25,12 @@ export class CardsController {
   @Post('admin/card-templates')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(cardTemplateUpsertSchema))
-  createTemplate(@Body() body: z.infer<typeof cardTemplateUpsertSchema>) { return this.cards.createTemplate(body); }
+  createTemplate(@Body(new ZodValidationPipe(cardTemplateUpsertSchema)) body: z.infer<typeof cardTemplateUpsertSchema>) { return this.cards.createTemplate(body); }
 
   @Patch('admin/card-templates/:id')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(cardTemplateUpsertSchema.partial()))
-  updateTemplate(@Param('id') id: string, @Body() body: Partial<z.infer<typeof cardTemplateUpsertSchema>>) { return this.cards.updateTemplate(id, body); }
+  updateTemplate(@Param('id') id: string, @Body(new ZodValidationPipe(cardTemplateUpsertSchema.partial())) body: Partial<z.infer<typeof cardTemplateUpsertSchema>>) { return this.cards.updateTemplate(id, body); }
 
   @Delete('admin/card-templates/:id')
   @UseGuards(AuthGuard)
@@ -42,8 +40,7 @@ export class CardsController {
   @Post('admin/cards/generate')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(cardGenerateSchema))
-  generate(@Body() body: z.infer<typeof cardGenerateSchema>) { return this.cards.generate(body); }
+  generate(@Body(new ZodValidationPipe(cardGenerateSchema)) body: z.infer<typeof cardGenerateSchema>) { return this.cards.generate(body); }
 
   @Delete('admin/cards/:id')
   @UseGuards(AuthGuard)
@@ -58,8 +55,7 @@ export class CardsController {
   @Post('user/cards/redeem')
   @UseGuards(AuthGuard)
   @Roles('user')
-  @UsePipes(new ZodValidationPipe(cardRedeemSchema))
-  redeem(@Body() body: z.infer<typeof cardRedeemSchema>, @CurrentUser() user: SessionUser) {
+  redeem(@Body(new ZodValidationPipe(cardRedeemSchema)) body: z.infer<typeof cardRedeemSchema>, @CurrentUser() user: SessionUser) {
     return this.cards.redeem(user.customerId || '', body);
   }
 }

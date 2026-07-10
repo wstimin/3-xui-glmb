@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { renewalSchema, userRenewalSchema } from '@shiye/shared';
 import type { z } from 'zod';
 import { AuthGuard } from '../../shared/auth.guard.js';
@@ -25,16 +25,14 @@ export class FinanceController {
   @Post('user/renewals')
   @UseGuards(AuthGuard)
   @Roles('user')
-  @UsePipes(new ZodValidationPipe(userRenewalSchema))
-  renew(@Body() body: z.infer<typeof userRenewalSchema>, @CurrentUser() user: SessionUser) {
+  renew(@Body(new ZodValidationPipe(userRenewalSchema)) body: z.infer<typeof userRenewalSchema>, @CurrentUser() user: SessionUser) {
     return this.finance.renewCustomerNode(user.customerId || '', body.nodeId, body.months, user.username);
   }
 
   @Post('admin/customers/:id/nodes/:nodeId/renew')
   @UseGuards(AuthGuard)
   @Roles('admin')
-  @UsePipes(new ZodValidationPipe(renewalSchema))
-  adminRenew(@Param('id') id: string, @Param('nodeId') nodeId: string, @Body() body: z.infer<typeof renewalSchema>, @CurrentUser() user: SessionUser) {
+  adminRenew(@Param('id') id: string, @Param('nodeId') nodeId: string, @Body(new ZodValidationPipe(renewalSchema)) body: z.infer<typeof renewalSchema>, @CurrentUser() user: SessionUser) {
     return this.finance.renewCustomerNode(id, nodeId, body.months, user.username);
   }
 }
