@@ -16,6 +16,16 @@ export class XuiController {
   @UsePipes(new ZodValidationPipe(xuiServerUpsertSchema))
   test(@Body() body: z.infer<typeof xuiServerUpsertSchema>) { return this.xui.testConnection(body); }
 
+  @Post('admin/xui-servers/:id/test')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  testStoredServer(@Param('id') id: string) { return this.xui.testStoredServer(id); }
+
+  @Post('admin/service-nodes/:id/sync')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  syncServiceNode(@Param('id') id: string) { return this.xui.syncServiceNode(id); }
+
   @Post('admin/customers/:id/nodes/:nodeId/sync')
   @UseGuards(AuthGuard)
   @Roles('admin')

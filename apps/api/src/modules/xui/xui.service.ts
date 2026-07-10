@@ -41,6 +41,79 @@ export class XuiService {
     return { connected: true, inbounds };
   }
 
+  async testStoredServer(id: string) {
+    const server = await this.prisma.xuiServer.findUnique({ where: { id } });
+    if (!server) throw new NotFoundException('3x-ui 服务器不存在');
+
+    const client = await this.createAuthenticatedClient(server);
+    const inbounds = await client.listInbounds();
+    this.assertXuiSuccess(inbounds);
+    return { connected: true, serverId: id, enabled: server.enabled, inboundCount: this.xuiArray(inbounds).length, inbounds };
+  }
+
+  async syncServiceNode(serviceNodeId: string) {
+    const serviceNode = await this.prisma.serviceNode.findUnique({ where: { id: serviceNodeId }, select: { id: true, name: true } });
+    if (!serviceNode) throw new NotFoundException('服务节点不存在');
+
+    const customerNodes = await this.prisma.customerNode.findMany({
+      where: { serviceNodeId },
+      select: { id: true, customerId: true, xuiEmail: true }
+    });
+
+    const results: Array<{ customerNodeId: string; customerId: string; xuiEmail: string; synced: boolean; message?: string }> = [];
+    for (const node of customerNodes) {
+      try {
+        await this.syncCustomerNode(node.customerId, node.id);
+        results.push({ customerNodeId: node.id, customerId: node.customerId, xuiEmail: node.xuiEmail, synced: true });
+      } catch (error) {
+        results.push({ customerNodeId: node.id, customerId: node.customerId, xuiEmail: node.xuiEmail, synced: false, message: this.errorMessage(error) });
+      }
+    }
+
+    const success = results.filter((item) => item.synced).length;
+    return { serviceNodeId, serviceNodeName: serviceNode.name, total: results.length, success, failed: results.length - success, results };
+  }
+
+  async deleteCustomerNode(customerId: string, customerNodeId: string, keepTraffic = false) {
+    const customerNode = await this.prisma.customerNode.findFirst({
+      where: { id: customerNodeId, customerId },
+      include: { serviceNode: { include: { server: true } } }
+    });
+    if (!customerNode) throw new NotFoundException('用户节点不存在');
+    return this.deleteRemoteClient(customerNode.serviceNode.server, customerNode.xuiEmail, keepTraffic, {
+      customerId,
+      customerNodeId,
+      serviceNodeId: customerNode.serviceNodeId
+    });
+  }
+
+  async deleteServiceNodeClients(serviceNodeId: string, keepTraffic = false) {
+    const serviceNode = await this.prisma.serviceNode.findUnique({
+      where: { id: serviceNodeId },
+      include: { server: true, customerNodes: { select: { id: true, customerId: true, xuiEmail: true } } }
+    });
+    if (!serviceNode) throw new NotFoundException('服务节点不存在');
+
+    const results: Array<{ customerNodeId: string; customerId: string; xuiEmail: string; deleted: boolean; message?: string }> = [];
+    for (const node of serviceNode.customerNodes) {
+      try {
+        await this.deleteRemoteClient(serviceNode.server, node.xuiEmail, keepTraffic, {
+          customerId: node.customerId,
+          customerNodeId: node.id,
+          serviceNodeId
+        });
+        results.push({ customerNodeId: node.id, customerId: node.customerId, xuiEmail: node.xuiEmail, deleted: true });
+      } catch (error) {
+        results.push({ customerNodeId: node.id, customerId: node.customerId, xuiEmail: node.xuiEmail, deleted: false, message: this.errorMessage(error) });
+      }
+    }
+
+    const success = results.filter((item) => item.deleted).length;
+    const failed = results.length - success;
+    if (failed > 0) throw new BadGatewayException(`删除远端 3x-ui 客户端失败：成功 ${success}，失败 ${failed}`);
+    return { serviceNodeId, total: results.length, success, failed, results };
+  }
+
   async syncCustomerNode(customerId: string, customerNodeId: string, options: SyncOptions = {}) {
     const customerNode = await this.prisma.customerNode.findFirst({
       where: { id: customerNodeId, customerId },
@@ -144,6 +217,23 @@ export class XuiService {
     }
 
     return client;
+  }
+
+  private async deleteRemoteClient(server: XuiServerConfig & { id?: string | null }, xuiEmail: string, keepTraffic: boolean, detail: Record<string, unknown>) {
+    try {
+      const client = await this.createAuthenticatedClient(server);
+      const payload = await client.deleteClient(xuiEmail, keepTraffic);
+      this.assertXuiSuccess(payload);
+      await this.writeSyncLog(server.id || null, 'customer-node-delete', 'success', `Deleted ${xuiEmail}`, { ...detail, keepTraffic, response: this.toJsonValue(payload) });
+      return { deleted: true, xuiEmail, response: payload };
+    } catch (error) {
+      if (/not found|record not found|404/i.test(this.errorMessage(error))) {
+        await this.writeSyncLog(server.id || null, 'customer-node-delete', 'success', `Remote client already absent: ${xuiEmail}`, { ...detail, xuiEmail, keepTraffic });
+        return { deleted: true, xuiEmail, alreadyAbsent: true };
+      }
+      await this.writeSyncLog(server.id || null, 'customer-node-delete', 'failed', this.errorMessage(error), { ...detail, xuiEmail, keepTraffic });
+      throw new BadGatewayException(`删除 3x-ui 客户端失败：${this.errorMessage(error)}`);
+    }
   }
 
   private buildXuiClient(input: { uuid: string; subId: string; email: string; enabled: boolean; expireAt?: Date | null; trafficLimitGb: Prisma.Decimal | number | string | null }) {

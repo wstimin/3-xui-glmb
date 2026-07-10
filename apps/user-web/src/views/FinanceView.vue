@@ -6,6 +6,7 @@ import { api } from '../api';
 type PaymentProvider = 'alipay' | 'wechat' | 'epay' | 'bepusdt';
 type PaymentChannel = { id: string; provider: PaymentProvider; name: string };
 type RechargeOrder = { order: { tradeNo: string; amount: string }; payUrl?: string | null; qrCode?: string | null };
+type PublicSettings = { cardPurchaseUrl?: string };
 
 const code = ref('');
 const loading = ref(false);
@@ -14,23 +15,29 @@ const recharging = ref(false);
 const message = ref('');
 const error = ref('');
 const channels = ref<PaymentChannel[]>([]);
+const publicSettings = reactive({ cardPurchaseUrl: '' });
 const rechargeForm = reactive({ amount: 10, channelId: '', provider: 'epay' as PaymentProvider });
 const lastOrder = ref<RechargeOrder | null>(null);
 const qrImage = ref('');
 
 const selectedChannel = computed(() => channels.value.find((item) => item.id === rechargeForm.channelId));
 
-async function loadChannels() {
+async function loadFinanceData() {
   loading.value = true;
   error.value = '';
   try {
-    channels.value = await api<PaymentChannel[]>('/api/public/payment-channels');
+    const [channelResult, settingsResult] = await Promise.all([
+      api<PaymentChannel[]>('/api/public/payment-channels'),
+      api<{ settings: PublicSettings }>('/api/public/settings').catch((): { settings: PublicSettings } => ({ settings: {} }))
+    ]);
+    channels.value = channelResult;
+    publicSettings.cardPurchaseUrl = settingsResult.settings.cardPurchaseUrl || '';
     if (!rechargeForm.channelId && channels.value[0]) {
       rechargeForm.channelId = channels.value[0].id;
       rechargeForm.provider = channels.value[0].provider;
     }
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '加载支付方式失败';
+    error.value = err instanceof Error ? err.message : '加载财务数据失败';
   } finally {
     loading.value = false;
   }
@@ -79,6 +86,11 @@ async function redeemCard() {
   }
 }
 
+function openPurchaseUrl() {
+  if (!publicSettings.cardPurchaseUrl) return;
+  window.open(publicSettings.cardPurchaseUrl, '_blank', 'noopener,noreferrer');
+}
+
 function onChannelChange() {
   const channel = selectedChannel.value;
   if (channel) rechargeForm.provider = channel.provider;
@@ -94,7 +106,7 @@ function providerLabel(provider: PaymentProvider) {
   return labels[provider];
 }
 
-onMounted(loadChannels);
+onMounted(loadFinanceData);
 </script>
 
 <template>
@@ -124,7 +136,10 @@ onMounted(loadChannels);
     </section>
 
     <section class="panel finance-form">
-      <h2>卡密兑换</h2>
+      <div class="finance-card-title">
+        <h2>卡密兑换</h2>
+        <button v-if="publicSettings.cardPurchaseUrl" type="button" class="secondary-button" @click="openPurchaseUrl">购买卡密</button>
+      </div>
       <form @submit.prevent="redeemCard">
         <input v-model="code" placeholder="输入卡密" />
         <button :disabled="redeeming || !code.trim()">{{ redeeming ? '兑换中' : '兑换' }}</button>

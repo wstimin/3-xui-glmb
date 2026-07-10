@@ -66,6 +66,11 @@ export class XuiClient {
     return this.request(`/panel/api/clients/update/${encodeURIComponent(email)}`, { method: 'POST', body });
   }
 
+  deleteClient(email: string, keepTraffic = false) {
+    const query = keepTraffic ? '?keepTraffic=1' : '';
+    return this.request(`/panel/api/clients/del/${encodeURIComponent(email)}${query}`, { method: 'POST' });
+  }
+
   getClient(email: string) {
     return this.request(`/panel/api/clients/get/${encodeURIComponent(email)}`);
   }

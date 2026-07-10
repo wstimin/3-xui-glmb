@@ -100,7 +100,11 @@ export class NodesService {
 
   async deleteServiceNode(id: string) {
     await this.ensureServiceNode(id);
-    await this.prisma.serviceNode.delete({ where: { id } });
+    await this.xui.deleteServiceNodeClients(id);
+    await this.prisma.$transaction([
+      this.prisma.customerNode.deleteMany({ where: { serviceNodeId: id } }),
+      this.prisma.serviceNode.delete({ where: { id } })
+    ]);
     return { deleted: true, id };
   }
 
@@ -141,7 +145,13 @@ export class NodesService {
       },
       include: { serviceNode: { include: { server: true } }, customer: { select: { id: true, name: true, loginUsername: true } } }
     });
-    await this.xui.syncCustomerNode(customerId, node.id).catch(() => undefined);
+    try {
+      await this.xui.syncCustomerNode(customerId, node.id);
+    } catch (error) {
+      await this.prisma.customerNode.delete({ where: { id: node.id } }).catch(() => undefined);
+      throw error;
+    }
+
     return this.prisma.customerNode.findUnique({
       where: { id: node.id },
       include: { serviceNode: { include: { server: true } }, customer: { select: { id: true, name: true, loginUsername: true } } }
@@ -151,6 +161,7 @@ export class NodesService {
   async unbindCustomerNode(customerId: string, customerNodeId: string) {
     const node = await this.prisma.customerNode.findFirst({ where: { id: customerNodeId, customerId }, select: { id: true } });
     if (!node) throw new NotFoundException('用户节点不存在');
+    await this.xui.deleteCustomerNode(customerId, customerNodeId);
     await this.prisma.customerNode.delete({ where: { id: customerNodeId } });
     return { deleted: true, id: customerNodeId };
   }

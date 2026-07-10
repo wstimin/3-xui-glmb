@@ -144,7 +144,7 @@ async function renewNode(customer: Customer, node: CustomerNode) {
   error.value = '';
   try {
     await api(`/api/admin/customers/${customer.id}/nodes/${node.id}/renew`, { method: 'POST', body: { months } });
-    ElMessage.success('续费成功');
+    ElMessage.success('续费成功，已同步远端');
     await loadCustomers();
   } catch (err) {
     error.value = err instanceof Error ? err.message : '续费失败';
@@ -177,7 +177,7 @@ function editCustomer(customer: Customer) {
 }
 
 async function removeCustomer(customer: Customer) {
-  await ElMessageBox.confirm(`确认删除用户「${customer.name}」？`, '删除确认', { type: 'warning' });
+  await ElMessageBox.confirm(`确认删除用户「${customer.name}」？系统会先删除该用户所有远端 3x-ui 客户端，再删除本地用户。`, '删除确认', { type: 'warning' });
   await api(`/api/admin/customers/${customer.id}`, { method: 'DELETE' });
   ElMessage.success('用户已删除');
   if (editingCustomerId.value === customer.id) resetCustomerForm();
@@ -210,7 +210,7 @@ onMounted(loadCustomers);
       <el-form-item label="名称"><el-input v-model="customerForm.name" /></el-form-item>
       <el-form-item label="登录账号"><el-input v-model="customerForm.loginUsername" /></el-form-item>
       <el-form-item label="登录密码"><el-input v-model="customerForm.loginPassword" type="password" show-password :placeholder="editingCustomerId ? '留空不修改' : '可留空自动生成'" /></el-form-item>
-      <el-form-item label="邮箱"><el-input v-model="customerForm.email" /></el-form-item>
+      <el-form-item label="邮箱"><el-input v-model="customerForm.email" placeholder="可留空" /></el-form-item>
       <el-form-item label="手机"><el-input v-model="customerForm.phone" /></el-form-item>
       <el-form-item label="余额"><el-input-number v-model="customerForm.balance" :min="0" :precision="2" style="width: 100%" /></el-form-item>
       <el-form-item label="状态"><el-select v-model="customerForm.status" style="width: 100%"><el-option label="启用" value="active" /><el-option label="禁用" value="disabled" /></el-select></el-form-item>
@@ -230,6 +230,7 @@ onMounted(loadCustomers);
       </el-select>
       <el-input v-model="bindForm.xuiEmail" placeholder="3x-ui 邮箱，可留空" />
       <el-date-picker v-model="bindForm.expireAt" type="datetime" placeholder="到期时间，可留空" value-format="YYYY-MM-DDTHH:mm:ss.SSSZ" style="width: 100%" />
+      <el-input-number v-model="bindForm.trafficLimitGb" :min="0" :precision="2" placeholder="流量 GB，可留空" style="width: 100%" />
       <el-button type="primary" :loading="binding" :disabled="!bindForm.customerId || !bindForm.serviceNodeId" @click="bindNode">绑定</el-button>
     </div>
     <div v-if="selectedCustomer?.nodes?.length" class="bind-hint">当前用户已绑定 {{ selectedCustomer.nodes.length }} 个节点</div>

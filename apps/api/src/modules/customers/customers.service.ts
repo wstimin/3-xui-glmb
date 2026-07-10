@@ -4,10 +4,11 @@ import { balanceAdjustSchema, customerUpsertSchema } from '@shiye/shared';
 import bcrypt from 'bcryptjs';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service.js';
+import { XuiService } from '../xui/xui.service.js';
 
 @Injectable()
 export class CustomersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly xui: XuiService) {}
 
   async list() {
     const [items, total] = await this.prisma.$transaction([
@@ -59,7 +60,16 @@ export class CustomersService {
   }
 
   async remove(id: string) {
-    await this.ensureExists(id);
+    const customer = await this.prisma.customer.findUnique({
+      where: { id },
+      select: { id: true, nodes: { select: { id: true } } }
+    });
+    if (!customer) throw new NotFoundException('用户不存在');
+
+    for (const node of customer.nodes) {
+      await this.xui.deleteCustomerNode(id, node.id);
+    }
+
     await this.prisma.customer.delete({ where: { id } });
     return { deleted: true, id };
   }

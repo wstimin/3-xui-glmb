@@ -24,7 +24,7 @@ export const serviceNodeUpsertSchema = z.object({
 
 export const customerNodeCreateSchema = z.object({
   serviceNodeId: z.string().min(1),
-  xuiEmail: z.string().trim().email().optional(),
+  xuiEmail: z.string().trim().min(1).max(160).optional().or(z.literal('')),
   uuid: z.string().trim().max(80).optional(),
   expireAt: z.coerce.date().optional(),
   trafficLimitGb: z.coerce.number().finite().min(0).optional()

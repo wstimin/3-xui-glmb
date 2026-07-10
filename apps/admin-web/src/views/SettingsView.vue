@@ -4,7 +4,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Upload, X } from 'lucide-vue-next';
 import { api } from '../api';
 
-type AdminSettings = { brand: { brandName: string; logoDataUrl: string } };
+type AdminSettings = { brand: { brandName: string; logoDataUrl: string }; business: { cardPurchaseUrl: string } };
 type PaymentProvider = 'alipay' | 'wechat' | 'epay' | 'bepusdt';
 type PaymentChannel = {
   id: string;
@@ -42,6 +42,7 @@ const error = ref('');
 const channels = ref<PaymentChannel[]>([]);
 const editingChannelId = ref('');
 const brandForm = reactive({ brandName: '十夜管理系统', logoDataUrl: '' });
+const businessForm = reactive({ cardPurchaseUrl: '' });
 const passwordForm = reactive({ currentPassword: '', newPassword: '' });
 const channelForm = reactive({
   provider: 'epay' as PaymentProvider,
@@ -80,6 +81,7 @@ async function loadSettings() {
       api<PaymentChannel[]>('/api/admin/payment-channels')
     ]);
     Object.assign(brandForm, settings.brand);
+    Object.assign(businessForm, settings.business || { cardPurchaseUrl: '' });
     channels.value = paymentChannels;
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载失败';
@@ -96,6 +98,19 @@ async function saveBrand() {
     ElMessage.success('品牌设置已保存');
   } catch (err) {
     error.value = err instanceof Error ? err.message : '保存失败';
+  } finally {
+    savingBrand.value = false;
+  }
+}
+
+async function saveBusiness() {
+  savingBrand.value = true;
+  error.value = '';
+  try {
+    await api<AdminSettings>('/api/admin/settings', { method: 'PUT', body: { business: businessForm } });
+    ElMessage.success('业务设置已保存');
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '保存业务设置失败';
   } finally {
     savingBrand.value = false;
   }
@@ -318,6 +333,14 @@ onMounted(loadSettings);
         <el-form-item label="当前密码"><el-input v-model="passwordForm.currentPassword" type="password" show-password /></el-form-item>
         <el-form-item label="新密码"><el-input v-model="passwordForm.newPassword" type="password" show-password minlength="8" /></el-form-item>
         <el-form-item><el-button type="primary" :loading="changingPassword" :disabled="!passwordForm.currentPassword || passwordForm.newPassword.length < 8" @click="changePassword">修改密码</el-button></el-form-item>
+      </el-form>
+    </div>
+
+    <div class="panel">
+      <div class="panel-toolbar"><strong>业务设置</strong></div>
+      <el-form :model="businessForm" label-width="112px" v-loading="loading">
+        <el-form-item label="卡密购买地址"><el-input v-model="businessForm.cardPurchaseUrl" placeholder="https://example.com/buy" /></el-form-item>
+        <el-form-item><el-button type="primary" :loading="savingBrand" @click="saveBusiness">保存业务设置</el-button></el-form-item>
       </el-form>
     </div>
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue';
-import { Copy, RefreshCw } from 'lucide-vue-next';
+import QRCode from 'qrcode';
+import { Copy, QrCode, RefreshCw, X } from 'lucide-vue-next';
 import { api } from '../api';
 
 type UserNode = {
@@ -20,6 +21,7 @@ const error = ref('');
 const message = ref('');
 const nodes = ref<UserNode[]>([]);
 const monthsByNode = ref<Record<string, number>>({});
+const qrPreview = ref<{ title: string; image: string } | null>(null);
 
 async function loadNodes() {
   loading.value = true;
@@ -40,7 +42,7 @@ async function renewNode(nodeId: string) {
   try {
     const months = monthsByNode.value[nodeId] || 1;
     await api('/api/user/renewals', { method: 'POST', body: { nodeId, months } });
-    message.value = '续费成功';
+    message.value = '续费成功，节点已同步远端';
     await loadNodes();
   } catch (err) {
     error.value = err instanceof Error ? err.message : '续费失败';
@@ -52,6 +54,21 @@ async function renewNode(nodeId: string) {
 async function copyText(text: string) {
   await navigator.clipboard.writeText(text);
   message.value = '已复制';
+}
+
+async function showQrCode(node: UserNode, link: string, index: number) {
+  try {
+    qrPreview.value = {
+      title: `${node.serviceNode.name} / 线路 ${index + 1}`,
+      image: await QRCode.toDataURL(link, { width: 260, margin: 1 })
+    };
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '生成二维码失败';
+  }
+}
+
+function closeQrCode() {
+  qrPreview.value = null;
 }
 
 function formatDate(value?: string | null) {
@@ -85,9 +102,10 @@ onMounted(loadNodes);
         <span v-if="node.subId">订阅标识：{{ node.subId }}</span>
       </div>
       <div v-if="node.links?.length" class="link-list">
-        <div v-for="link in node.links" :key="link" class="link-row">
-          <code>{{ link }}</code>
-          <button class="copy-button" @click="copyText(link)"><Copy :size="15" /></button>
+        <div v-for="(link, index) in node.links" :key="link" class="link-row">
+          <span class="link-label">线路 {{ index + 1 }}</span>
+          <button class="copy-button" type="button" title="复制节点" @click="copyText(link)"><Copy :size="15" /></button>
+          <button class="copy-button" type="button" title="显示二维码" @click="showQrCode(node, link, index)"><QrCode :size="15" /></button>
         </div>
       </div>
       <div v-else class="empty-hint">暂未获取到 3-xui 节点链接，请联系管理员同步节点。</div>
@@ -102,5 +120,15 @@ onMounted(loadNodes);
       </form>
     </article>
     <div v-if="!loading && !nodes.length" class="panel">暂无节点</div>
+  </div>
+
+  <div v-if="qrPreview" class="qr-modal" @click.self="closeQrCode">
+    <div class="qr-modal-panel">
+      <div class="qr-modal-head">
+        <strong>{{ qrPreview.title }}</strong>
+        <button class="copy-button" type="button" title="关闭" @click="closeQrCode"><X :size="16" /></button>
+      </div>
+      <img :src="qrPreview.image" alt="节点二维码" />
+    </div>
   </div>
 </template>

@@ -12,7 +12,12 @@ export class SettingsController {
 
   @Get('public/branding')
   async publicBranding() {
-    return { settings: await this.settings.publicBranding() };
+    return { settings: await this.settings.publicSettings() };
+  }
+
+  @Get('public/settings')
+  async publicSettings() {
+    return { settings: await this.settings.publicSettings() };
   }
 
   @Get('admin/settings')

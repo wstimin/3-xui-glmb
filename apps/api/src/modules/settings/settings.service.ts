@@ -9,6 +9,10 @@ type BrandSettings = {
   logoDataUrl: string;
 };
 
+type BusinessSettings = {
+  cardPurchaseUrl: string;
+};
+
 type SettingsUpdateInput = z.infer<typeof settingsUpdateSchema>;
 
 @Injectable()
@@ -24,8 +28,20 @@ export class SettingsService {
     };
   }
 
+  async publicBusiness(): Promise<BusinessSettings> {
+    const row = await this.prisma.systemSetting.findUnique({ where: { key: 'business' } });
+    const value = row?.value && typeof row.value === 'object' ? row.value as Partial<BusinessSettings> : {};
+    return { cardPurchaseUrl: value.cardPurchaseUrl || '' };
+  }
+
+  async publicSettings() {
+    const [brand, business] = await Promise.all([this.publicBranding(), this.publicBusiness()]);
+    return { ...brand, ...business };
+  }
+
   async adminSettings() {
-    return { brand: await this.publicBranding() };
+    const [brand, business] = await Promise.all([this.publicBranding(), this.publicBusiness()]);
+    return { brand, business };
   }
 
   async updateSettings(input: SettingsUpdateInput) {
@@ -34,6 +50,14 @@ export class SettingsService {
         where: { key: 'brand' },
         create: { key: 'brand', value: toJsonValue(input.brand) },
         update: { value: toJsonValue(input.brand) }
+      });
+    }
+
+    if (input.business) {
+      await this.prisma.systemSetting.upsert({
+        where: { key: 'business' },
+        create: { key: 'business', value: toJsonValue(input.business) },
+        update: { value: toJsonValue(input.business) }
       });
     }
 

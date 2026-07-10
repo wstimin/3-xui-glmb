@@ -5,7 +5,11 @@ export const brandSettingsSchema = z.object({
   logoDataUrl: z.string().trim().max(500_000).optional().default('')
 });
 
-export const settingsUpdateSchema = z.object({
-  brand: brandSettingsSchema.optional()
+export const businessSettingsSchema = z.object({
+  cardPurchaseUrl: z.string().trim().url().optional().or(z.literal(''))
 });
 
+export const settingsUpdateSchema = z.object({
+  brand: brandSettingsSchema.optional(),
+  business: businessSettingsSchema.optional()
+});

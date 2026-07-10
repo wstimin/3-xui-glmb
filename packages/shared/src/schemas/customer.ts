@@ -7,7 +7,7 @@ export const customerUpsertSchema = z.object({
   name: z.string().trim().min(1).max(80),
   loginUsername: z.string().trim().min(1).max(80),
   loginPassword: z.string().min(6).max(256).optional(),
-  email: z.string().email().optional().or(z.literal('')),
+  email: z.preprocess((value) => typeof value === 'string' && value.trim() === '' ? undefined : value, z.string().trim().email().max(160).optional()),
   phone: z.string().trim().max(40).optional(),
   balance: moneySchema.default(0),
   status: customerStatusSchema.default('active'),
