@@ -14,6 +14,8 @@ systemd 服务文件：/etc/systemd/system/shiye-management-system.service
 
 如果你安装时自定义了 `APP_NAME`、`APP_DIR`、`MYSQL_DATABASE` 或 `MYSQL_USER`，下面命令里的对应值也要改成你自己的。
 
+> 注意：本文主要适用于一键安装脚本部署的 systemd 服务。如果你是通过 1Panel 或宝塔部署，请优先在对应面板里停止 Node.js 项目、删除网站反向代理和项目目录，再按需删除数据库。面板部署的项目目录可能是 `/opt/shiye-management-system`、`/www/wwwroot/shiye-management-system` 或你自己选择的路径，不要直接套用下面的 `/opt/...` 删除命令。
+
 ## 1. 停止并删除 systemd 服务
 
 ```bash
@@ -95,7 +97,21 @@ certbot delete --cert-name 你的域名
 
 如果不确定证书名称，以 `certbot certificates` 输出里的 `Certificate Name` 为准。
 
-## 5. 删除数据库，可选且会清空业务数据
+## 5. 面板部署卸载方式
+
+如果你通过 1Panel 或宝塔部署，建议按这个顺序清理：
+
+1. 在面板里停止 Node.js 项目或运行环境。
+2. 删除对应网站、反向代理或域名绑定。
+3. 删除实际项目目录，例如 `/opt/shiye-management-system` 或 `/www/wwwroot/shiye-management-system`。
+4. 如果确定不再使用，删除 MySQL 数据库和数据库账号。
+5. 检查端口 `3388` 是否仍有进程监听。
+
+删除数据库前至少备份 MySQL 数据库、`data/config.json` 和 `data/.secret`。
+
+## 6. 删除数据库，可选且会清空业务数据
+
+删除数据库前请确认已经备份 MySQL 数据库、`data/config.json`、`data/.secret`，以及一键安装时的 `/etc/default/shiye-management-system`。
 
 如果你只是重装系统或升级项目，通常不要删除数据库。删除数据库会清空用户、订单、余额、节点、支付配置、卡密和日志等业务数据。
 
@@ -124,7 +140,7 @@ MYSQL_USER=my_user
 mysql -uroot -p -e "DROP DATABASE IF EXISTS \`my_panel\`; DROP USER IF EXISTS 'my_user'@'127.0.0.1'; FLUSH PRIVILEGES;"
 ```
 
-## 6. 是否卸载 Node.js、MySQL、Nginx
+## 7. 是否卸载 Node.js、MySQL、Nginx
 
 一键脚本可能安装了 Node.js、MySQL/MariaDB、Nginx、Certbot。这些组件可能被服务器上的其他网站或服务共用，默认不建议直接卸载。
 
@@ -158,7 +174,7 @@ systemctl list-units --type=service --state=running
 ss -lntp
 ```
 
-## 7. 一键卸载命令，保留数据库
+## 8. 一键卸载命令，保留数据库
 
 如果你只想删除程序、服务、Nginx 配置和证书，但保留数据库，可以执行：
 
@@ -183,9 +199,9 @@ certbot certificates
 certbot delete --cert-name 你的域名
 ```
 
-## 8. 一键彻底卸载命令，删除数据库
+## 9. 一键彻底卸载命令，删除数据库
 
-下面命令会删除程序和默认数据库。执行前请确认已经备份。
+下面命令会删除程序和默认数据库。执行前请确认已经备份 MySQL 数据库、`data/config.json`、`data/.secret`，以及 `/etc/default/shiye-management-system`。
 
 ```bash
 systemctl stop shiye-management-system || true
@@ -208,7 +224,7 @@ mysql -uroot -p -e "DROP DATABASE IF EXISTS \`shiye_management\`; DROP USER IF E
 mysql -uroot -e "DROP DATABASE IF EXISTS \`shiye_management\`; DROP USER IF EXISTS 'shiye'@'127.0.0.1'; FLUSH PRIVILEGES;"
 ```
 
-## 9. 卸载后检查
+## 10. 卸载后检查
 
 ```bash
 systemctl status shiye-management-system

@@ -275,7 +275,28 @@ data/
 
 如果是 MySQL 模式，业务数据主要在 MySQL；但 `data/config.json` 和 `data/.secret` 仍然很重要。
 
-## 10. 常见问题
+如果可以进入终端，更新后建议检查：
+
+```bash
+cd /opt/shiye-management-system
+npm install --omit=dev
+node --check server.js
+node --check public/app.js
+node --check public/user.js
+```
+
+## 10. 自动停用和续费恢复
+
+系统会定时维护用户节点状态：
+
+- 本地节点到期后会自动停用，并同步停用远端 3-xui client。
+- 远端 3-xui client 流量用完或被远端停用时，本地节点会同步停用。
+- 因流量超限被停用的节点续费后，系统会调用 3-xui 官方 `POST /panel/api/clients/resetTraffic/{email}` 接口，清空该 client 流量并重新启用。
+- 用户自助续费会先同步 3-xui 成功，再扣除余额并保存本地续费记录。
+
+建议 3-xui 节点优先填写 API Token，并确认面板版本支持 `resetTraffic/{email}` 接口。
+
+## 11. 常见问题
 
 ### 页面能打开，但是提示数据库连接失败
 
@@ -297,13 +318,13 @@ public/
 
 ### 首次安装页面没有出现
 
-可能已经存在 `data/config.json`，或者你在运行环境里设置了 `DB_CLIENT`、`MYSQL_HOST` 等环境变量。确认配置是否正确；如果是全新安装，可以停止服务后检查 `data/config.json` 是否存在。
+可能已经存在 `data/config.json`，或者你在运行环境里设置了 `MYSQL_HOST`、`DATABASE_URL` 等数据库环境变量。确认配置是否正确；如果是全新安装，可以停止服务后检查 `data/config.json` 是否存在。
 
 ### 管理员和用户不能同时在同一个浏览器登录
 
 管理员入口和用户入口是分开的，但同一个浏览器共享登录 Cookie。建议管理员和用户测试时使用不同浏览器，或一个用无痕窗口。
 
-## 11. 备份建议
+## 12. 备份建议
 
 至少备份：
 
