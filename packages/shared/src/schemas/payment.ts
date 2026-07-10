@@ -3,8 +3,28 @@ import { moneySchema } from './common.js';
 
 export const paymentProviderSchema = z.enum(['alipay', 'wechat', 'epay', 'bepusdt']);
 
+export const paymentChannelProviderSchema = z.enum(['epay', 'bepusdt']);
+
+export const paymentChannelConfigSchema = z.object({
+  url: z.string().trim().url().optional().or(z.literal('')),
+  pid: z.string().trim().max(120).optional().or(z.literal('')),
+  key: z.string().trim().max(2048).optional().or(z.literal('')),
+  token: z.string().trim().max(2048).optional().or(z.literal('')),
+  type: z.string().trim().max(80).optional().or(z.literal('')),
+  notifyUrl: z.string().trim().url().optional().or(z.literal('')),
+  returnUrl: z.string().trim().url().optional().or(z.literal(''))
+});
+
+export const paymentChannelUpsertSchema = z.object({
+  provider: paymentChannelProviderSchema,
+  name: z.string().trim().min(1).max(120),
+  enabled: z.boolean().default(false),
+  sortOrder: z.coerce.number().int().min(0).max(9999).default(0),
+  config: paymentChannelConfigSchema.default({})
+});
+
 export const rechargeOrderCreateSchema = z.object({
-  provider: paymentProviderSchema,
+  provider: paymentChannelProviderSchema,
   amount: moneySchema,
   channelId: z.string().min(1).optional(),
   returnUrl: z.string().url().optional()

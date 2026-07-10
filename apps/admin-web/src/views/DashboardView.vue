@@ -6,6 +6,7 @@ type CustomerResult = { total: number; items: Array<{ id: string; status: string
 type ServiceNode = { id: string; enabled: boolean };
 type XuiServer = { id: string; enabled: boolean };
 type CardResult = { total: number; items: Array<{ id: string; status: string }> };
+type PaymentChannel = { id: string; enabled: boolean };
 
 const loading = ref(false);
 const error = ref('');
@@ -13,6 +14,7 @@ const customers = ref<CustomerResult>({ total: 0, items: [] });
 const serviceNodes = ref<ServiceNode[]>([]);
 const servers = ref<XuiServer[]>([]);
 const cards = ref<CardResult>({ total: 0, items: [] });
+const paymentChannels = ref<PaymentChannel[]>([]);
 
 const activeCustomers = computed(() => customers.value.items.filter((item) => item.status === 'active').length);
 const enabledNodes = computed(() => serviceNodes.value.filter((item) => item.enabled).length);
@@ -22,16 +24,18 @@ async function loadDashboard() {
   loading.value = true;
   error.value = '';
   try {
-    const [customerResult, nodeResult, serverResult, cardResult] = await Promise.all([
+    const [customerResult, nodeResult, serverResult, cardResult, channelResult] = await Promise.all([
       api<CustomerResult>('/api/admin/customers'),
       api<ServiceNode[]>('/api/admin/service-nodes'),
       api<XuiServer[]>('/api/admin/xui-servers'),
-      api<CardResult>('/api/admin/cards')
+      api<CardResult>('/api/admin/cards'),
+      api<PaymentChannel[]>('/api/admin/payment-channels')
     ]);
     customers.value = customerResult;
     serviceNodes.value = nodeResult;
     servers.value = serverResult;
     cards.value = cardResult;
+    paymentChannels.value = channelResult;
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载失败';
   } finally {
@@ -59,7 +63,7 @@ onMounted(loadDashboard);
       <el-button size="small" :loading="loading" @click="loadDashboard">刷新</el-button>
     </div>
     <el-descriptions :column="1" border>
-      <el-descriptions-item label="在线支付">未启用</el-descriptions-item>
+      <el-descriptions-item label="在线支付">{{ paymentChannels.filter((item) => item.enabled).length ? '已启用' : '未启用' }}</el-descriptions-item>
       <el-descriptions-item label="自动停用过期节点">未启用</el-descriptions-item>
       <el-descriptions-item label="远端流量同步任务">未启用</el-descriptions-item>
     </el-descriptions>

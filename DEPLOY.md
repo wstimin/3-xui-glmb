@@ -167,13 +167,11 @@ sudo systemctl reload nginx
 
 本项目只有“用户充值余额”业务，用户可输入任意充值金额，支付成功后只增加用户余额，不直接续费套餐。
 
-支付平台回调地址格式：
+当前后台可配置并可发起下单的在线支付通道为易支付和 BEpusdt。支付平台回调地址格式：
 
 ```text
 https://panel.example.com/api/payments/epay/notify
 https://panel.example.com/api/payments/bepusdt/notify
-https://panel.example.com/api/payments/alipay/notify
-https://panel.example.com/api/payments/wechat/notify
 ```
 
 结果页地址：
@@ -182,7 +180,7 @@ https://panel.example.com/api/payments/wechat/notify
 https://panel.example.com/payment/result?trade_no=订单号
 ```
 
-实际启用哪个通道，以后台配置和 `.env` 为准。
+实际启用哪个通道，以后台“系统设置 - 支付方式”配置为准。
 
 ## 7. 更新版本
 

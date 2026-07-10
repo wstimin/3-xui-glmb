@@ -23,6 +23,7 @@ data/*.db
 *.backup
 *.old
 *.tmp
+*.tsbuildinfo
 
 .DS_Store
 Thumbs.db

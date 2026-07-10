@@ -114,13 +114,11 @@ npm run install:check
 
 本项目支付只用于用户充值余额。用户可输入任意充值金额，支付成功后系统增加用户余额，用户再使用余额去续费节点。
 
-支付回调地址格式：
+当前后台可配置并可发起下单的在线支付通道为易支付和 BEpusdt。支付回调地址格式：
 
 ```text
 https://你的域名/api/payments/epay/notify
 https://你的域名/api/payments/bepusdt/notify
-https://你的域名/api/payments/alipay/notify
-https://你的域名/api/payments/wechat/notify
 ```
 
 ## 安全说明

@@ -35,12 +35,16 @@ export function signSession(user: SessionUser) {
 }
 
 export function sessionCookie(token: string, maxAgeSeconds = 7 * 24 * 60 * 60) {
-  const secure = process.env.NODE_ENV === 'production';
-  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secure ? '; Secure' : ''}`;
+  return `${COOKIE_NAME}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAgeSeconds}${secureCookieFlag()}`;
 }
 
 export function clearSessionCookie() {
-  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
+  return `${COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookieFlag()}`;
+}
+
+function secureCookieFlag() {
+  const publicUrl = process.env.PUBLIC_WEB_URL || process.env.APP_URL || process.env.PUBLIC_SITE_URL || '';
+  return /^https:\/\//i.test(publicUrl) ? '; Secure' : '';
 }
 
 function bearerToken(value: string | undefined) {

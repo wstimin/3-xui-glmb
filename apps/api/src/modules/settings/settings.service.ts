@@ -25,7 +25,7 @@ export class SettingsService {
   }
 
   async adminSettings() {
-    return { brand: await this.publicBranding(), payments: [] };
+    return { brand: await this.publicBranding() };
   }
 
   async updateSettings(input: SettingsUpdateInput) {

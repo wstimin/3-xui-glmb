@@ -1,6 +1,8 @@
 import { createHash, createVerify, randomBytes, timingSafeEqual } from 'node:crypto';
 import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PaymentProvider, Prisma } from '@prisma/client';
+import { paymentChannelUpsertSchema } from '@shiye/shared';
+import type { z } from 'zod';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { EncryptionService } from '../security/encryption.service.js';
 
@@ -11,6 +13,7 @@ type NotifyInput = {
 };
 
 type PaymentConfig = Record<string, unknown>;
+type PaymentChannelInput = z.infer<typeof paymentChannelUpsertSchema>;
 
 type VerifiedNotify = {
   tradeNo: string;
@@ -29,6 +32,76 @@ type CreatePaymentResult = {
 @Injectable()
 export class PaymentsService {
   constructor(private readonly prisma: PrismaService, private readonly encryption: EncryptionService) {}
+
+  async publicChannels() {
+    const channels = await this.prisma.paymentChannel.findMany({
+      where: { enabled: true, provider: { in: ['epay', 'bepusdt'] } },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }]
+    });
+    return channels.map((channel) => ({
+      id: channel.id,
+      provider: channel.provider,
+      name: channel.name
+    }));
+  }
+
+  async adminChannels() {
+    const channels = await this.prisma.paymentChannel.findMany({
+      where: { provider: { in: ['epay', 'bepusdt'] } },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }]
+    });
+    return channels.map((channel) => this.maskChannel(channel));
+  }
+
+  async createChannel(input: PaymentChannelInput) {
+    this.assertImplementedProvider(input.provider);
+    const config = this.prepareChannelConfig(input.provider, input.config || {});
+    if (input.enabled) this.assertChannelReady(input.provider, config);
+
+    const channel = await this.prisma.paymentChannel.create({
+      data: {
+        provider: input.provider,
+        name: input.name,
+        enabled: input.enabled,
+        sortOrder: input.sortOrder,
+        configEnc: toJsonValue(config)
+      }
+    });
+    return this.maskChannel(channel);
+  }
+
+  async updateChannel(id: string, input: Partial<PaymentChannelInput>) {
+    const current = await this.prisma.paymentChannel.findUnique({ where: { id } });
+    if (!current) throw new NotFoundException('支付通道不存在');
+
+    const provider = input.provider || current.provider;
+    this.assertImplementedProvider(provider);
+    const currentConfig = this.configObject(current.configEnc);
+    const nextConfig = input.config === undefined
+      ? currentConfig
+      : this.prepareChannelConfig(provider, input.config, currentConfig);
+    const enabled = input.enabled ?? current.enabled;
+    if (enabled) this.assertChannelReady(provider, nextConfig);
+
+    const channel = await this.prisma.paymentChannel.update({
+      where: { id },
+      data: {
+        provider,
+        name: input.name,
+        enabled: input.enabled,
+        sortOrder: input.sortOrder,
+        configEnc: input.config === undefined ? undefined : toJsonValue(nextConfig)
+      }
+    });
+    return this.maskChannel(channel);
+  }
+
+  async deleteChannel(id: string) {
+    const current = await this.prisma.paymentChannel.findUnique({ where: { id }, select: { id: true } });
+    if (!current) throw new NotFoundException('支付通道不存在');
+    await this.prisma.paymentChannel.delete({ where: { id } });
+    return { deleted: true, id };
+  }
 
   async createOrder(customerId: string, body: { provider?: string; channelId?: string; amount: unknown; returnUrl?: string }) {
     const customer = await this.prisma.customer.findUnique({ where: { id: customerId }, select: { id: true, status: true } });
@@ -267,6 +340,63 @@ export class PaymentsService {
     throw new BadRequestException('不支持的支付通道');
   }
 
+  private assertImplementedProvider(provider: PaymentProvider) {
+    if (provider !== 'epay' && provider !== 'bepusdt') throw new BadRequestException('该支付通道暂未实现下单接口');
+  }
+
+  private prepareChannelConfig(provider: PaymentProvider, input: PaymentChannelInput['config'], previous: PaymentConfig = {}) {
+    const config: PaymentConfig = {
+      url: text(input.url),
+      pid: text(input.pid),
+      type: text(input.type),
+      notifyUrl: text(input.notifyUrl),
+      returnUrl: text(input.returnUrl)
+    };
+
+    const key = text(input.key);
+    const token = text(input.token);
+    if (provider === 'epay') {
+      config.key = key ? this.encryption.encrypt(key) : previous.key || '';
+    }
+    if (provider === 'bepusdt') {
+      config.token = token ? this.encryption.encrypt(token) : previous.token || '';
+    }
+
+    return compactConfig(config);
+  }
+
+  private assertChannelReady(provider: PaymentProvider, config: PaymentConfig) {
+    if (provider === 'epay' && (!text(config.url) || !text(config.pid) || !this.secret(config, 'key'))) {
+      throw new BadRequestException('易支付启用前必须填写接口地址、商户号和密钥');
+    }
+    if (provider === 'bepusdt' && (!text(config.url) || !this.secret(config, 'token'))) {
+      throw new BadRequestException('BEpusdt 启用前必须填写接口地址和 Token');
+    }
+  }
+
+  private maskChannel(channel: { id: string; provider: PaymentProvider; name: string; enabled: boolean; sortOrder: number; configEnc: Prisma.JsonValue; createdAt: Date; updatedAt: Date }) {
+    const config = this.configObject(channel.configEnc);
+    return {
+      id: channel.id,
+      provider: channel.provider,
+      name: channel.name,
+      enabled: channel.enabled,
+      sortOrder: channel.sortOrder,
+      config: {
+        url: text(config.url),
+        pid: text(config.pid),
+        type: text(config.type),
+        notifyUrl: text(config.notifyUrl),
+        returnUrl: text(config.returnUrl)
+      },
+      hasKey: Boolean(text(config.key)),
+      hasToken: Boolean(text(config.token)),
+      notifyUrl: this.paymentUrl(text(config.notifyUrl), `/api/payments/${channel.provider}/notify`),
+      createdAt: channel.createdAt,
+      updatedAt: channel.updatedAt
+    };
+  }
+
   private configObject(value: Prisma.JsonValue): PaymentConfig {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as PaymentConfig : {};
   }
@@ -354,6 +484,10 @@ function submitUrl(gateway: string) {
 
 function toJsonValue(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+}
+
+function compactConfig(config: PaymentConfig) {
+  return Object.fromEntries(Object.entries(config).filter(([, value]) => value !== undefined && value !== null && value !== ''));
 }
 
 function isUniqueError(error: unknown) {

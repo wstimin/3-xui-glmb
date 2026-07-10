@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Param, Post, Query, Res, UseGuards, UsePipes } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Res, UseGuards, UsePipes } from '@nestjs/common';
 import type { Response } from 'express';
-import { rechargeOrderCreateSchema } from '@shiye/shared';
+import { paymentChannelUpsertSchema, rechargeOrderCreateSchema } from '@shiye/shared';
 import type { z } from 'zod';
 import { AuthGuard } from '../../shared/auth.guard.js';
 import { CurrentUser } from '../../shared/current-user.decorator.js';
@@ -12,6 +12,41 @@ import { PaymentsService } from './payments.service.js';
 @Controller()
 export class PaymentsController {
   constructor(private readonly payments: PaymentsService) {}
+
+  @Get('public/payment-channels')
+  publicChannels() {
+    return this.payments.publicChannels();
+  }
+
+  @Get('admin/payment-channels')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  adminChannels() {
+    return this.payments.adminChannels();
+  }
+
+  @Post('admin/payment-channels')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  @UsePipes(new ZodValidationPipe(paymentChannelUpsertSchema))
+  createChannel(@Body() body: z.infer<typeof paymentChannelUpsertSchema>) {
+    return this.payments.createChannel(body);
+  }
+
+  @Patch('admin/payment-channels/:id')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  @UsePipes(new ZodValidationPipe(paymentChannelUpsertSchema.partial()))
+  updateChannel(@Param('id') id: string, @Body() body: Partial<z.infer<typeof paymentChannelUpsertSchema>>) {
+    return this.payments.updateChannel(id, body);
+  }
+
+  @Delete('admin/payment-channels/:id')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  deleteChannel(@Param('id') id: string) {
+    return this.payments.deleteChannel(id);
+  }
 
   @Post('user/recharge-orders')
   @UseGuards(AuthGuard)

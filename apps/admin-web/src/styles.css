@@ -17,10 +17,17 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .panel-toolbar { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .bind-panel { margin-bottom: 16px; }
 .bind-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 96px; gap: 12px; }
+.bind-row-wide { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(180px, 1fr) 220px 96px; }
+.balance-row { grid-template-columns: minmax(0, 1fr) 110px 150px minmax(160px, 1fr) 96px; }
 .bind-hint { margin-top: 10px; color: #64748b; font-size: 13px; }
+.customer-form-panel { margin-bottom: 16px; }
+.customer-form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; }
+.customer-form-grid .el-form-item { margin-bottom: 0; }
 .muted-text { color: #94a3b8; }
 .node-list { display: grid; gap: 8px; padding: 6px 0; }
 .node-row { min-height: 52px; display: grid; grid-template-columns: minmax(0, 1fr) 32px; align-items: center; gap: 10px; }
+.customer-node-row { grid-template-columns: minmax(0, 1fr) auto; }
+.node-actions { display: flex; align-items: center; gap: 6px; }
 .node-meta { min-width: 0; display: grid; gap: 2px; }
 .node-meta strong, .node-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-meta span { color: #64748b; font-size: 12px; }
@@ -37,8 +44,11 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .settings-grid .panel:last-child { grid-column: 1 / -1; }
 .loading { opacity: 0.65; }
 .node-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.node-grid h2 { margin: 0 0 14px; font-size: 18px; }
+.node-grid h2 { margin: 0; font-size: 18px; }
+.payment-panel { grid-column: 1 / -1; }
+.payment-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; margin-bottom: 16px; }
+.payment-form .el-form-item { margin-bottom: 0; }
 @media (max-width: 1200px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 1100px) { .inline-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 1100px) { .inline-form, .payment-form, .customer-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bind-row-wide, .balance-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 900px) { .node-grid, .settings-grid { grid-template-columns: 1fr; } }
-@media (max-width: 720px) { .inline-form, .bind-row { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .inline-form, .bind-row, .bind-row-wide, .balance-row, .payment-form, .customer-form-grid { grid-template-columns: 1fr; } .customer-node-row { grid-template-columns: 1fr; } .node-actions { flex-wrap: wrap; } }

@@ -24,21 +24,26 @@ type BalanceLog = {
   customer?: { name: string; loginUsername: string };
 };
 
+type PaymentChannel = { id: string; enabled: boolean; name: string };
+
 const loading = ref(false);
 const error = ref('');
 const orders = ref<RechargeOrder[]>([]);
 const logs = ref<BalanceLog[]>([]);
+const paymentChannels = ref<PaymentChannel[]>([]);
 
 async function loadFinance() {
   loading.value = true;
   error.value = '';
   try {
-    const [orderResult, logResult] = await Promise.all([
+    const [orderResult, logResult, channelResult] = await Promise.all([
       api<RechargeOrder[]>('/api/admin/recharge-orders'),
-      api<BalanceLog[]>('/api/admin/balance-logs')
+      api<BalanceLog[]>('/api/admin/balance-logs'),
+      api<PaymentChannel[]>('/api/admin/payment-channels')
     ]);
     orders.value = orderResult;
     logs.value = logResult;
+    paymentChannels.value = channelResult;
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载失败';
   } finally {
@@ -55,7 +60,7 @@ onMounted(loadFinance);
 
 <template>
   <h1 class="page-title">财务中心</h1>
-  <el-alert class="page-alert" title="在线支付未启用；当前可用充值方式为卡密兑换或管理员手工调整余额。" type="warning" show-icon :closable="false" />
+  <el-alert v-if="!paymentChannels.some((item) => item.enabled)" class="page-alert" title="尚未启用在线支付方式；用户仍可使用卡密兑换，管理员也可手工调整余额。" type="warning" show-icon :closable="false" />
   <el-alert v-if="error" class="page-alert" :title="error" type="error" show-icon :closable="false" />
 
   <div class="panel">
