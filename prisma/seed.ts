@@ -13,8 +13,8 @@ async function main() {
 
   await prisma.adminUser.upsert({
     where: { username },
-    create: { username, passwordHash },
-    update: {}
+    create: { username, passwordHash, status: 'active' },
+    update: { passwordHash, status: 'active' }
   });
 
   await prisma.systemSetting.upsert({
@@ -23,7 +23,7 @@ async function main() {
     update: {}
   });
 
-  console.log(`Seed completed. Admin username: ${username}`);
+  console.log(`Seed completed. Admin username: ${username}. Password was synced from DEFAULT_ADMIN_PASSWORD.`);
 }
 
 main()
