@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
-import { CreditCard, LayoutDashboard, LogOut, Router, Settings, Users, WalletCards } from 'lucide-vue-next';
+import { CreditCard, LayoutDashboard, LogOut, ReceiptText, Router, Settings, Users, WalletCards } from 'lucide-vue-next';
 import { api } from './api';
 
 type SessionUser = { role: string; username: string };
@@ -12,6 +12,7 @@ const nav = [
   { to: '/nodes', label: '节点', icon: Router },
   { to: '/finance', label: '财务', icon: WalletCards },
   { to: '/cards', label: '卡密', icon: CreditCard },
+  { to: '/payments', label: '支付', icon: ReceiptText },
   { to: '/settings', label: '设置', icon: Settings }
 ];
 

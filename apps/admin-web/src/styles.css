@@ -59,7 +59,22 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .logo-preview img { width: 100%; height: 100%; object-fit: contain; }
 .file-button { height: 32px; display: inline-flex; align-items: center; gap: 6px; padding: 0 12px; border: 1px solid #d7dde8; border-radius: 6px; background: #fff; color: #1f2937; cursor: pointer; }
 .file-button input { display: none; }
+.generated-template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.generated-template-card { display: grid; gap: 12px; min-width: 0; border: 1px solid #d7dde8; border-radius: 8px; padding: 14px; background: #fbfdff; }
+.generated-template-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; }
+.generated-template-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.generated-template-head span { flex: 0 0 auto; color: #64748b; font-size: 12px; }
+.generated-batch-stack { display: grid; gap: 10px; }
+.generated-batch-card { display: grid; gap: 10px; min-width: 0; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #fff; }
+.generated-batch-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.generated-batch-head > div { min-width: 0; display: grid; gap: 3px; }
+.generated-batch-head strong, .generated-batch-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.generated-batch-head span { color: #64748b; font-size: 12px; }
+.generated-batch-head .el-button, .generated-code-row .el-button { display: inline-flex; align-items: center; gap: 5px; }
+.generated-code-list { max-height: 240px; overflow: auto; display: grid; gap: 6px; padding-right: 2px; }
+.generated-code-row { min-height: 34px; display: grid; grid-template-columns: minmax(0, 1fr) 68px; align-items: center; gap: 8px; border: 1px solid #eef2f7; border-radius: 6px; padding: 4px 6px 4px 10px; background: #f8fafc; }
+.generated-code-row code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Consolas, Monaco, monospace; color: #0f172a; }
 @media (max-width: 1200px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 1100px) { .inline-form, .payment-form, .customer-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bind-row-wide, .balance-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 900px) { .node-grid, .settings-grid { grid-template-columns: 1fr; } }
-@media (max-width: 720px) { .inline-form, .bind-row, .bind-row-wide, .balance-row, .payment-form, .customer-form-grid { grid-template-columns: 1fr; } .customer-node-row { grid-template-columns: 1fr; } .node-actions { flex-wrap: wrap; } }
+@media (max-width: 720px) { .inline-form, .bind-row, .bind-row-wide, .balance-row, .payment-form, .customer-form-grid, .generated-template-grid { grid-template-columns: 1fr; } .customer-node-row { grid-template-columns: 1fr; } .node-actions { flex-wrap: wrap; } .generated-batch-head { display: grid; } }

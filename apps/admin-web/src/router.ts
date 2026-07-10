@@ -4,6 +4,7 @@ import CustomersView from './views/CustomersView.vue';
 import NodesView from './views/NodesView.vue';
 import FinanceView from './views/FinanceView.vue';
 import CardsView from './views/CardsView.vue';
+import PaymentsView from './views/PaymentsView.vue';
 import SettingsView from './views/SettingsView.vue';
 
 export const router = createRouter({
@@ -14,6 +15,7 @@ export const router = createRouter({
     { path: '/nodes', component: NodesView },
     { path: '/finance', component: FinanceView },
     { path: '/cards', component: CardsView },
+    { path: '/payments', component: PaymentsView },
     { path: '/settings', component: SettingsView }
   ]
 });

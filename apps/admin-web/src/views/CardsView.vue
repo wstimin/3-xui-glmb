@@ -1,18 +1,21 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { Copy } from 'lucide-vue-next';
 import { api } from '../api';
 
 type CardTemplate = { id: string; name: string; amount: string; quantity: number; prefix?: string | null; enabled: boolean; remark?: string | null };
 type CardBatch = { id: string; name: string; amount: string; quantity: number; prefix?: string | null; templateId?: string | null; createdAt: string; template?: CardTemplate | null; _count?: { cards: number } };
 type Card = { id: string; codePreview: string; amount: string; status: string; usedAt?: string | null; batch?: { id: string; name: string } | null; usedBy?: { name: string; loginUsername: string } | null };
 type CardResult = { items: Card[]; batches: CardBatch[]; templates: CardTemplate[] };
+type GeneratedBatch = { id: string; groupId: string; groupName: string; name: string; amount: string; quantity: number; createdAt: string; codes: string[] };
+type GeneratedBatchGroup = { id: string; name: string; batches: GeneratedBatch[] };
 
 const loading = ref(false);
 const generating = ref(false);
 const savingTemplate = ref(false);
 const error = ref('');
-const generatedCodes = ref<string[]>([]);
+const generatedBatches = ref<GeneratedBatch[]>([]);
 const cards = ref<Card[]>([]);
 const batches = ref<CardBatch[]>([]);
 const templates = ref<CardTemplate[]>([]);
@@ -22,6 +25,14 @@ const templateForm = reactive({ name: '', amount: 10, quantity: 10, prefix: '', 
 
 const enabledTemplates = computed(() => templates.value.filter((template) => template.enabled));
 const selectedTemplate = computed(() => templates.value.find((item) => item.id === generateForm.templateId));
+const generatedBatchGroups = computed<GeneratedBatchGroup[]>(() => {
+  const groups = new Map<string, GeneratedBatchGroup>();
+  for (const batch of generatedBatches.value) {
+    if (!groups.has(batch.groupId)) groups.set(batch.groupId, { id: batch.groupId, name: batch.groupName, batches: [] });
+    groups.get(batch.groupId)?.batches.push(batch);
+  }
+  return Array.from(groups.values());
+});
 
 async function loadCards() {
   loading.value = true;
@@ -62,8 +73,17 @@ async function generateCards() {
     const body = template
       ? { templateId: template.id, name: generateForm.name || defaultBatchName(template.name), amount: Number(template.amount), quantity: template.quantity, prefix: template.prefix || '' }
       : { ...generateForm, templateId: undefined };
-    const result = await api<{ codes: string[] }>('/api/admin/cards/generate', { method: 'POST', body });
-    generatedCodes.value = result.codes;
+    const result = await api<{ batchId: string; generated: number; codes: string[] }>('/api/admin/cards/generate', { method: 'POST', body });
+    generatedBatches.value.unshift({
+      id: result.batchId,
+      groupId: template?.id || 'custom',
+      groupName: template?.name || '自定义卡密',
+      name: body.name,
+      amount: String(body.amount),
+      quantity: result.generated,
+      createdAt: new Date().toISOString(),
+      codes: result.codes
+    });
     ElMessage.success(`已生成 ${result.codes.length} 张卡密`);
     resetGenerateForm(template?.id || '');
     await loadCards();
@@ -113,6 +133,33 @@ async function removeCard(card: Card) {
   await api(`/api/admin/cards/${card.id}`, { method: 'DELETE' });
   ElMessage.success('卡密已删除');
   await loadCards();
+}
+
+async function copyCodes(codes: string[], message = `已复制 ${codes.length} 张卡密`) {
+  try {
+    await copyText(codes.join('\n'));
+    ElMessage.success(message);
+  } catch (err) {
+    ElMessage.error(err instanceof Error ? err.message : '复制失败');
+  }
+}
+
+async function copyText(text: string) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(textarea);
+  if (!copied) throw new Error('复制失败');
 }
 
 function resetTemplateForm() {
@@ -189,8 +236,36 @@ onMounted(loadCards);
         <el-form-item label="前缀"><el-input v-model="generateForm.prefix" :disabled="Boolean(selectedTemplate)" maxlength="16" /></el-form-item>
         <el-form-item><el-button type="primary" :loading="generating" :disabled="!generateForm.name" @click="generateCards">生成卡密</el-button></el-form-item>
       </el-form>
-      <el-input v-if="generatedCodes.length" class="generated-codes" :model-value="generatedCodes.join('\n')" type="textarea" :rows="8" readonly />
     </section>
+  </div>
+
+  <div v-if="generatedBatchGroups.length" class="panel list-panel">
+    <div class="panel-toolbar"><strong>新生成卡密</strong></div>
+    <div class="generated-template-grid">
+      <section v-for="group in generatedBatchGroups" :key="group.id" class="generated-template-card">
+        <div class="generated-template-head">
+          <strong>{{ group.name }}</strong>
+          <span>{{ group.batches.length }} 个批次</span>
+        </div>
+        <div class="generated-batch-stack">
+          <div v-for="batch in group.batches" :key="batch.id" class="generated-batch-card">
+            <div class="generated-batch-head">
+              <div>
+                <strong>{{ batch.name }}</strong>
+                <span>{{ batch.amount }} 元 / {{ batch.quantity }} 张 / {{ formatDate(batch.createdAt) }}</span>
+              </div>
+              <el-button size="small" type="primary" plain @click="copyCodes(batch.codes)"><Copy :size="15" />复制整批</el-button>
+            </div>
+            <div class="generated-code-list">
+              <div v-for="code in batch.codes" :key="code" class="generated-code-row">
+                <code>{{ code }}</code>
+                <el-button size="small" text @click="copyCodes([code], '已复制卡密')"><Copy :size="14" />复制</el-button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
 
   <div class="panel list-panel">
