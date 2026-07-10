@@ -3,13 +3,19 @@ import { moneySchema } from './common.js';
 
 export const paymentProviderSchema = z.enum(['alipay', 'wechat', 'epay', 'bepusdt']);
 
-export const paymentChannelProviderSchema = z.enum(['epay', 'bepusdt']);
+export const paymentChannelProviderSchema = z.enum(['alipay', 'wechat', 'epay', 'bepusdt']);
 
 export const paymentChannelConfigSchema = z.object({
   url: z.string().trim().url().optional().or(z.literal('')),
   pid: z.string().trim().max(120).optional().or(z.literal('')),
   key: z.string().trim().max(2048).optional().or(z.literal('')),
   token: z.string().trim().max(2048).optional().or(z.literal('')),
+  appId: z.string().trim().max(120).optional().or(z.literal('')),
+  privateKey: z.string().trim().max(12000).optional().or(z.literal('')),
+  publicKey: z.string().trim().max(12000).optional().or(z.literal('')),
+  productName: z.string().trim().max(120).optional().or(z.literal('')),
+  mchId: z.string().trim().max(120).optional().or(z.literal('')),
+  apiKey: z.string().trim().max(2048).optional().or(z.literal('')),
   type: z.string().trim().max(80).optional().or(z.literal('')),
   notifyUrl: z.string().trim().url().optional().or(z.literal('')),
   returnUrl: z.string().trim().url().optional().or(z.literal(''))

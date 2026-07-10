@@ -29,7 +29,9 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .finance-form button { width: 96px; height: 40px; border: 0; border-radius: 6px; background: #0f766e; color: #fff; cursor: pointer; }
 .finance-form button:disabled { opacity: 0.55; cursor: not-allowed; }
 .empty-hint { margin-top: 10px; color: #64748b; font-size: 13px; }
-.qr-box { margin-top: 12px; padding: 12px; border: 1px dashed #cbd5e1; border-radius: 6px; word-break: break-all; }
+.qr-box { margin-top: 12px; display: grid; justify-items: center; gap: 10px; padding: 12px; border: 1px dashed #cbd5e1; border-radius: 6px; word-break: break-all; }
+.qr-box img { width: 220px; height: 220px; max-width: 100%; background: #fff; }
+.qr-box span { width: 100%; color: #64748b; font-size: 12px; text-align: center; }
 .result-panel h2 { margin: 0 0 14px; font-size: 20px; }
 .pay-link { display: inline-flex; align-items: center; justify-content: center; margin-top: 14px; height: 38px; padding: 0 14px; border-radius: 6px; background: #0f766e; color: #fff; text-decoration: none; }
 .success-text { color: #047857; }

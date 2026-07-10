@@ -59,13 +59,13 @@ export class PaymentsController {
   @Post('payments/:provider/notify')
   async notify(@Param('provider') provider: string, @Query() query: Record<string, unknown>, @Body() body: unknown, @Res() response: Response) {
     const text = await this.payments.notify({ provider, query, body });
-    return response.type('text/plain').send(text);
+    return response.type(this.payments.notifyContentType(provider)).send(text);
   }
 
   @Get('payments/:provider/notify')
   async getNotify(@Param('provider') provider: string, @Query() query: Record<string, unknown>, @Res() response: Response) {
     const text = await this.payments.notify({ provider, query, body: {} });
-    return response.type('text/plain').send(text);
+    return response.type(this.payments.notifyContentType(provider)).send(text);
   }
 
   @Get('payments/result')

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
+import QRCode from 'qrcode';
 import { api } from '../api';
 
 type PaymentResult = { tradeNo: string; status: string; amount: string; paidAt?: string | null; payUrl?: string | null; qrCode?: string | null };
@@ -9,6 +10,7 @@ const route = useRoute();
 const loading = ref(false);
 const error = ref('');
 const result = ref<PaymentResult | null>(null);
+const qrImage = ref('');
 const tradeNo = computed(() => String(route.query.trade_no || route.query.out_trade_no || ''));
 
 async function loadResult() {
@@ -20,6 +22,7 @@ async function loadResult() {
   error.value = '';
   try {
     result.value = await api<PaymentResult>(`/api/payments/result?trade_no=${encodeURIComponent(tradeNo.value)}`);
+    qrImage.value = result.value.qrCode ? await QRCode.toDataURL(result.value.qrCode, { width: 220, margin: 1 }) : '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : '查询支付结果失败';
   } finally {
@@ -47,5 +50,9 @@ onMounted(loadResult);
     <div class="profile-row"><span>金额</span><strong>{{ result?.amount || '-' }}</strong></div>
     <div class="profile-row"><span>到账时间</span><strong>{{ result?.paidAt || '-' }}</strong></div>
     <a v-if="result?.status === 'pending' && result.payUrl" class="pay-link" :href="result.payUrl">继续支付</a>
+    <div v-if="result?.status === 'pending' && result.qrCode" class="qr-box">
+      <img v-if="qrImage" :src="qrImage" alt="支付二维码" />
+      <span>{{ result.qrCode }}</span>
+    </div>
   </div>
 </template>

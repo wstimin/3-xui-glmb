@@ -1,4 +1,4 @@
-import { createHash, createVerify, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, createSign, createVerify, randomBytes, timingSafeEqual } from 'node:crypto';
 import { BadRequestException, Injectable, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { PaymentProvider, Prisma } from '@prisma/client';
 import { paymentChannelUpsertSchema } from '@shiye/shared';
@@ -35,7 +35,7 @@ export class PaymentsService {
 
   async publicChannels() {
     const channels = await this.prisma.paymentChannel.findMany({
-      where: { enabled: true, provider: { in: ['epay', 'bepusdt'] } },
+      where: { enabled: true, provider: { in: ['alipay', 'wechat', 'epay', 'bepusdt'] } },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }]
     });
     return channels.map((channel) => ({
@@ -47,7 +47,7 @@ export class PaymentsService {
 
   async adminChannels() {
     const channels = await this.prisma.paymentChannel.findMany({
-      where: { provider: { in: ['epay', 'bepusdt'] } },
+      where: { provider: { in: ['alipay', 'wechat', 'epay', 'bepusdt'] } },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }]
     });
     return channels.map((channel) => this.maskChannel(channel));
@@ -118,7 +118,7 @@ export class PaymentsService {
 
     const config = this.configObject(channel.configEnc);
     const tradeNo = this.tradeNo();
-    const payment = this.createPayment(provider, config, {
+    const payment = await this.createPayment(provider, config, {
       tradeNo,
       amount,
       returnUrl: body.returnUrl,
@@ -174,9 +174,11 @@ export class PaymentsService {
     throw new BadRequestException('不支持的支付通道');
   }
 
-  private createPayment(provider: PaymentProvider, config: PaymentConfig, order: { tradeNo: string; amount: Prisma.Decimal; subject: string; returnUrl?: string }): CreatePaymentResult {
+  private async createPayment(provider: PaymentProvider, config: PaymentConfig, order: { tradeNo: string; amount: Prisma.Decimal; subject: string; returnUrl?: string }): Promise<CreatePaymentResult> {
     if (provider === 'epay') return this.createEpayPayment(config, order);
     if (provider === 'bepusdt') return this.createBepusdtPayment(config, order);
+    if (provider === 'alipay') return this.createAlipayPayment(config, order);
+    if (provider === 'wechat') return this.createWechatV2Payment(config, order);
     throw new ServiceUnavailableException('该支付通道暂未实现下单接口');
   }
 
@@ -215,6 +217,98 @@ export class PaymentsService {
     params.sign = md5(sortedSignContent(params, ['sign', 'signature', 'sign_type']) + token);
     params.sign_type = 'MD5';
     return { payUrl: `${gateway}?${new URLSearchParams(params).toString()}`, raw: { request: params } };
+  }
+
+  private async createAlipayPayment(config: PaymentConfig, order: { tradeNo: string; amount: Prisma.Decimal; subject: string; returnUrl?: string }): Promise<CreatePaymentResult> {
+    const gateway = text(config.url) || 'https://openapi.alipay.com/gateway.do';
+    const appId = text(config.appId || config.app_id);
+    const privateKey = this.secret(config, 'privateKey', 'privateKeyEnc', 'merchantPem');
+    if (!gateway || !appId || !privateKey) throw new ServiceUnavailableException('支付宝通道配置不完整');
+
+    const mode = normalizeAlipayMode(text(config.type));
+    if (mode === 'page' || mode === 'wap') {
+      const method = mode === 'page' ? 'alipay.trade.page.pay' : 'alipay.trade.wap.pay';
+      const productCode = mode === 'page' ? 'FAST_INSTANT_TRADE_PAY' : 'QUICK_WAP_WAY';
+      const params = this.createAlipayBaseParams(config, gateway, appId, method, {
+        out_trade_no: order.tradeNo,
+        total_amount: order.amount.toFixed(2),
+        subject: text(config.productName) || order.subject,
+        product_code: productCode
+      }, order.returnUrl || text(config.returnUrl), `/payment/result?trade_no=${encodeURIComponent(order.tradeNo)}`);
+      params.sign = signRsaSha256(sortedSignContent(params, ['sign']), privateKey);
+      return { payUrl: `${gateway}?${new URLSearchParams(params).toString()}`, raw: { request: withoutSecrets(params, ['sign']) } };
+    }
+
+    const params = this.createAlipayBaseParams(config, gateway, appId, 'alipay.trade.precreate', {
+      out_trade_no: order.tradeNo,
+      total_amount: order.amount.toFixed(2),
+      subject: text(config.productName) || order.subject
+    });
+    params.sign = signRsaSha256(sortedSignContent(params, ['sign']), privateKey);
+
+    const response = await fetch(gateway, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded;charset=utf-8' },
+      body: new URLSearchParams(params)
+    });
+    const rawText = await response.text();
+    const payload = parseJson(rawText);
+    const data = payload?.alipay_trade_precreate_response;
+    if (!response.ok || !data || data.code !== '10000' || !data.qr_code) {
+      throw new ServiceUnavailableException(`支付宝下单失败：${text(data?.sub_msg || data?.msg || rawText) || response.statusText}`);
+    }
+    return { qrCode: text(data.qr_code), raw: { request: withoutSecrets(params, ['sign']), response: payload } };
+  }
+
+  private createAlipayBaseParams(config: PaymentConfig, gateway: string, appId: string, method: string, bizContent: Record<string, string>, returnUrl?: string, fallbackReturnPath = '/payment/result') {
+    const params: Record<string, string> = {
+      app_id: appId,
+      method,
+      format: 'JSON',
+      charset: 'utf-8',
+      sign_type: 'RSA2',
+      timestamp: formatAlipayTimestamp(new Date()),
+      version: '1.0',
+      notify_url: this.absolutePaymentUrl(text(config.notifyUrl), '/api/payments/alipay/notify'),
+      biz_content: JSON.stringify(bizContent)
+    };
+    const resolvedReturnUrl = this.paymentUrl(returnUrl || text(config.returnUrl), fallbackReturnPath);
+    if (/^https?:\/\//i.test(resolvedReturnUrl)) params.return_url = resolvedReturnUrl;
+    if (!gateway) throw new ServiceUnavailableException('支付宝接口地址不能为空');
+    return params;
+  }
+
+  private async createWechatV2Payment(config: PaymentConfig, order: { tradeNo: string; amount: Prisma.Decimal; subject: string; returnUrl?: string }): Promise<CreatePaymentResult> {
+    const gateway = text(config.url) || 'https://api.mch.weixin.qq.com/pay/unifiedorder';
+    const appId = text(config.appId || config.app_id);
+    const mchId = text(config.mchId || config.mch_id || config.pid);
+    const apiKey = this.secret(config, 'apiKey', 'apiV2Key', 'key');
+    if (!gateway || !appId || !mchId || !apiKey) throw new ServiceUnavailableException('微信支付通道配置不完整');
+
+    const params: Record<string, string> = {
+      appid: appId,
+      mch_id: mchId,
+      nonce_str: randomBytes(16).toString('hex'),
+      body: text(config.productName) || order.subject,
+      out_trade_no: order.tradeNo,
+      total_fee: order.amount.mul(100).toDecimalPlaces(0).toString(),
+      spbill_create_ip: text(process.env.SERVER_IP) || '127.0.0.1',
+      notify_url: this.absolutePaymentUrl(text(config.notifyUrl), '/api/payments/wechat/notify'),
+      trade_type: 'NATIVE'
+    };
+    params.sign = wechatMd5Sign(params, apiKey);
+
+    const response = await fetch(gateway, {
+      method: 'POST',
+      headers: { 'content-type': 'text/xml;charset=utf-8' },
+      body: toWechatXml(params)
+    });
+    const rawText = await response.text();
+    const payload = parseXml(rawText);
+    if (!response.ok || payload.return_code !== 'SUCCESS' || payload.result_code !== 'SUCCESS' || !payload.code_url) {
+      throw new ServiceUnavailableException(`微信支付下单失败：${text(payload.err_code_des || payload.return_msg || rawText) || response.statusText}`);
+    }
+    return { qrCode: text(payload.code_url), raw: { request: withoutSecrets(params, ['sign']), response: payload } };
   }
 
   private verifyEpay(params: Record<string, unknown>, config: PaymentConfig): VerifiedNotify {
@@ -341,13 +435,16 @@ export class PaymentsService {
   }
 
   private assertImplementedProvider(provider: PaymentProvider) {
-    if (provider !== 'epay' && provider !== 'bepusdt') throw new BadRequestException('该支付通道暂未实现下单接口');
+    if (!['alipay', 'wechat', 'epay', 'bepusdt'].includes(provider)) throw new BadRequestException('该支付通道暂未实现下单接口');
   }
 
   private prepareChannelConfig(provider: PaymentProvider, input: PaymentChannelInput['config'], previous: PaymentConfig = {}) {
     const config: PaymentConfig = {
       url: text(input.url),
       pid: text(input.pid),
+      appId: text(input.appId),
+      productName: text(input.productName),
+      mchId: text(input.mchId),
       type: text(input.type),
       notifyUrl: text(input.notifyUrl),
       returnUrl: text(input.returnUrl)
@@ -361,6 +458,16 @@ export class PaymentsService {
     if (provider === 'bepusdt') {
       config.token = token ? this.encryption.encrypt(token) : previous.token || '';
     }
+    if (provider === 'alipay') {
+      const privateKey = text(input.privateKey);
+      const publicKey = text(input.publicKey);
+      config.privateKey = privateKey ? this.encryption.encrypt(privateKey) : previous.privateKey || previous.privateKeyEnc || '';
+      config.publicKey = publicKey ? this.encryption.encrypt(publicKey) : previous.publicKey || previous.publicKeyEnc || '';
+    }
+    if (provider === 'wechat') {
+      const apiKey = text(input.apiKey || input.key);
+      config.apiKey = apiKey ? this.encryption.encrypt(apiKey) : previous.apiKey || previous.key || '';
+    }
 
     return compactConfig(config);
   }
@@ -371,6 +478,15 @@ export class PaymentsService {
     }
     if (provider === 'bepusdt' && (!text(config.url) || !this.secret(config, 'token'))) {
       throw new BadRequestException('BEpusdt 启用前必须填写接口地址和 Token');
+    }
+    if (provider === 'alipay' && (!text(config.appId) || !this.secret(config, 'privateKey') || !this.secret(config, 'publicKey'))) {
+      throw new BadRequestException('支付宝启用前必须填写 AppID、应用私钥和支付宝公钥');
+    }
+    if (provider === 'wechat' && (!text(config.appId) || !text(config.mchId) || !this.secret(config, 'apiKey'))) {
+      throw new BadRequestException('微信支付启用前必须填写 AppID、商户号和 V2 API 密钥');
+    }
+    if ((provider === 'alipay' || provider === 'wechat') && !/^https?:\/\//i.test(this.paymentUrl(text(config.notifyUrl), `/api/payments/${provider}/notify`))) {
+      throw new BadRequestException('支付宝/微信启用前必须配置 PUBLIC_WEB_URL/APP_URL/PUBLIC_SITE_URL 或自定义完整回调地址');
     }
   }
 
@@ -385,12 +501,18 @@ export class PaymentsService {
       config: {
         url: text(config.url),
         pid: text(config.pid),
+        appId: text(config.appId),
+        productName: text(config.productName),
+        mchId: text(config.mchId),
         type: text(config.type),
         notifyUrl: text(config.notifyUrl),
         returnUrl: text(config.returnUrl)
       },
       hasKey: Boolean(text(config.key)),
       hasToken: Boolean(text(config.token)),
+      hasPrivateKey: Boolean(text(config.privateKey)),
+      hasPublicKey: Boolean(text(config.publicKey)),
+      hasApiKey: Boolean(text(config.apiKey)),
       notifyUrl: this.paymentUrl(text(config.notifyUrl), `/api/payments/${channel.provider}/notify`),
       createdAt: channel.createdAt,
       updatedAt: channel.updatedAt
@@ -412,14 +534,27 @@ export class PaymentsService {
 
   private notifyText(provider: PaymentProvider, status: 'success' | 'fail') {
     if (provider === 'alipay') return status === 'success' ? 'success' : 'failure';
+    if (provider === 'wechat') return status === 'success'
+      ? '<xml><return_code><![CDATA[SUCCESS]]></return_code><return_msg><![CDATA[OK]]></return_msg></xml>'
+      : '<xml><return_code><![CDATA[FAIL]]></return_code><return_msg><![CDATA[FAIL]]></return_msg></xml>';
     if (provider === 'bepusdt') return status === 'success' ? 'ok' : 'fail';
     return status === 'success' ? 'success' : 'fail';
+  }
+
+  notifyContentType(provider: string) {
+    return provider === 'wechat' ? 'application/xml' : 'text/plain';
   }
 
   private paymentUrl(configured: string, fallbackPath: string) {
     if (configured) return configured;
     const siteUrl = (process.env.PUBLIC_WEB_URL || process.env.APP_URL || process.env.PUBLIC_SITE_URL || '').replace(/\/+$/, '');
     return siteUrl ? `${siteUrl}${fallbackPath}` : fallbackPath;
+  }
+
+  private absolutePaymentUrl(configured: string, fallbackPath: string) {
+    const value = this.paymentUrl(configured, fallbackPath);
+    if (!/^https?:\/\//i.test(value)) throw new ServiceUnavailableException('支付宝/微信下单需要完整公网回调地址');
+    return value;
   }
 
   private tradeNo() {
@@ -429,7 +564,11 @@ export class PaymentsService {
 }
 
 function mergeParams(query: Record<string, unknown>, body: unknown) {
-  const bodyObject = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
+  const bodyObject = typeof body === 'string'
+    ? parseXml(body)
+    : body && typeof body === 'object' && !Array.isArray(body)
+      ? body as Record<string, unknown>
+      : {};
   return { ...query, ...bodyObject };
 }
 
@@ -445,8 +584,16 @@ function md5(value: string) {
   return createHash('md5').update(value, 'utf8').digest('hex');
 }
 
+function signRsaSha256(content: string, privateKey: string) {
+  return createSign('RSA-SHA256').update(content, 'utf8').sign(normalizePemKey(privateKey, 'PRIVATE KEY'), 'base64');
+}
+
 function verifyRsaSha256(content: string, sign: string, publicKey: string) {
   return createVerify('RSA-SHA256').update(content, 'utf8').verify(normalizePemKey(publicKey, 'PUBLIC KEY'), sign, 'base64');
+}
+
+function wechatMd5Sign(params: Record<string, unknown>, key: string) {
+  return md5(`${sortedSignContent(params, ['sign'])}&key=${key}`).toUpperCase();
 }
 
 function normalizePemKey(value: string, type: 'PUBLIC KEY' | 'PRIVATE KEY') {
@@ -464,6 +611,45 @@ function numberOrText(value: unknown) {
   if (value === undefined || value === null) return undefined;
   if (typeof value === 'number') return value;
   return text(value);
+}
+
+function formatAlipayTimestamp(date: Date) {
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
+
+function normalizeAlipayMode(value: string) {
+  const mode = value.toLowerCase();
+  if (['page', 'pc', 'web', 'alipay.trade.page.pay'].includes(mode)) return 'page';
+  if (['wap', 'mobile', 'h5', 'alipay.trade.wap.pay'].includes(mode)) return 'wap';
+  return 'precreate';
+}
+
+function parseJson(value: string): Record<string, any> | null {
+  try {
+    return JSON.parse(value) as Record<string, any>;
+  } catch {
+    return null;
+  }
+}
+
+function parseXml(value: string): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const match of value.matchAll(/<([A-Za-z0-9_:-]+)>\s*(?:<!\[CDATA\[([\s\S]*?)\]\]>|([\s\S]*?))\s*<\/\1>/g)) {
+    const key = match[1];
+    if (!key || key === 'xml') continue;
+    result[key] = (match[2] ?? match[3] ?? '').trim();
+  }
+  return result;
+}
+
+function toWechatXml(params: Record<string, string>) {
+  const nodes = Object.entries(params).map(([key, value]) => `<${key}><![CDATA[${value}]]></${key}>`).join('');
+  return `<xml>${nodes}</xml>`;
+}
+
+function withoutSecrets<T extends Record<string, unknown>>(value: T, keys: string[]) {
+  return Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
 }
 
 function money(value: unknown) {

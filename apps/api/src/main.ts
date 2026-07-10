@@ -15,6 +15,7 @@ async function bootstrap() {
 
   app.setGlobalPrefix('api');
   app.use(cookieParser());
+  app.use(express.text({ type: ['text/xml', 'application/xml', '*/xml'] }));
   app.use(express.urlencoded({ extended: false }));
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
