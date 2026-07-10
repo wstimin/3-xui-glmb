@@ -1,0 +1,16 @@
+[Unit]
+Description=Shiye API Service
+After=network.target mysql.service redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/shiye
+EnvironmentFile=/opt/shiye/.env
+ExecStart=/usr/bin/npm run start -w @shiye/api
+Restart=always
+RestartSec=3
+User=shiye
+Group=shiye
+
+[Install]
+WantedBy=multi-user.target

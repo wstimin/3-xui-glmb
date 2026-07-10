@@ -1,4 +1,7 @@
 node_modules/
+dist/
+apps/*/dist/
+packages/*/dist/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

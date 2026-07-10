@@ -1,0 +1,54 @@
+import { existsSync, readFileSync } from 'node:fs';
+import bcrypt from 'bcryptjs';
+import { PrismaClient } from '@prisma/client';
+
+loadEnv();
+
+const prisma = new PrismaClient();
+
+async function main() {
+  const username = process.env.DEFAULT_ADMIN_USERNAME || 'admin';
+  const password = process.env.DEFAULT_ADMIN_PASSWORD || 'admin123';
+  const passwordHash = await bcrypt.hash(password, 12);
+
+  await prisma.adminUser.upsert({
+    where: { username },
+    create: { username, passwordHash },
+    update: {}
+  });
+
+  await prisma.systemSetting.upsert({
+    where: { key: 'brand' },
+    create: { key: 'brand', value: { brandName: process.env.APP_NAME || '十夜管理系统', logoDataUrl: '' } },
+    update: {}
+  });
+
+  console.log(`Seed completed. Admin username: ${username}`);
+}
+
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });
+
+function loadEnv() {
+  if (!existsSync('.env')) return;
+  for (const line of readFileSync('.env', 'utf8').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const index = trimmed.indexOf('=');
+    if (index <= 0) continue;
+    const key = trimmed.slice(0, index).trim();
+    const value = unquote(trimmed.slice(index + 1).trim());
+    if (process.env[key] === undefined) process.env[key] = value;
+  }
+}
+
+function unquote(value: string) {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
+  return value;
+}
