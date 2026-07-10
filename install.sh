@@ -390,6 +390,34 @@ WantedBy=multi-user.target
 SERVICE
 }
 
+wait_for_api_health() {
+  health_url="http://127.0.0.1:${PORT}/api/health"
+  log "Waiting for API health check: ${health_url}"
+
+  attempts=30
+  attempt=1
+  while [ "${attempt}" -le "${attempts}" ]; do
+    if curl -fsS "${health_url}" >/dev/null 2>&1; then
+      log "API health check passed"
+      return 0
+    fi
+
+    if ! systemctl is-active --quiet "${APP_NAME}"; then
+      echo "${APP_NAME} is not active while waiting for API health." >&2
+      systemctl --no-pager --full status "${APP_NAME}" || true
+      journalctl -u "${APP_NAME}" -n 120 --no-pager --full || true
+      die "API service failed to start. Check the journal output above."
+    fi
+
+    sleep 2
+    attempt=$((attempt + 1))
+  done
+
+  systemctl --no-pager --full status "${APP_NAME}" || true
+  journalctl -u "${APP_NAME}" -n 120 --no-pager --full || true
+  die "API health check did not pass after $((attempts * 2)) seconds: ${health_url}"
+}
+
 validate_domain() {
   [ -n "${DOMAIN}" ] || die "DOMAIN is required when Nginx is enabled"
   echo "${DOMAIN}" | grep -Eq '^[A-Za-z0-9.-]+$' || die "DOMAIN can only contain letters, numbers, dots and hyphens"
@@ -570,6 +598,7 @@ main() {
   systemctl daemon-reload
   systemctl enable "${APP_NAME}"
   systemctl restart "${APP_NAME}"
+  wait_for_api_health
 
   configure_optional_nginx
 
