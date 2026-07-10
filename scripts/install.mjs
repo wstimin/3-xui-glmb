@@ -5,8 +5,8 @@ const steps = [
   ['prisma:generate', ['run', 'prisma:generate']],
   ['prisma:migrate', ['run', 'prisma:migrate']],
   ['db:seed', ['run', 'db:seed']],
-  ['typecheck', ['run', 'typecheck']],
   ['build', ['run', 'build']],
+  ['typecheck', ['run', 'typecheck']],
   ['deploy:check', ['run', 'deploy:check']]
 ];
 
