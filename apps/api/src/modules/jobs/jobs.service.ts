@@ -25,6 +25,17 @@ type DisableTrafficExceededResult = {
   message?: string;
 };
 
+type JobSettings = {
+  disableExpiredEnabled: boolean;
+  trafficSyncEnabled: boolean;
+};
+
+const JOB_SETTINGS_KEY = 'jobs';
+const DEFAULT_JOB_SETTINGS: JobSettings = {
+  disableExpiredEnabled: true,
+  trafficSyncEnabled: true
+};
+
 @Injectable()
 export class JobsService {
   private readonly logger = new Logger(JobsService.name);
@@ -36,6 +47,8 @@ export class JobsService {
   @Cron(CronExpression.EVERY_10_MINUTES)
   async disableExpiredOnSchedule() {
     if (this.disableExpiredRunning) return;
+    const settings = await this.jobSettings();
+    if (!settings.disableExpiredEnabled) return;
     this.disableExpiredRunning = true;
     try {
       const result = await this.disableExpiredNodes('schedule');
@@ -52,6 +65,8 @@ export class JobsService {
   @Cron(CronExpression.EVERY_10_MINUTES)
   async disableTrafficExceededOnSchedule() {
     if (this.disableTrafficExceededRunning) return;
+    const settings = await this.jobSettings();
+    if (!settings.trafficSyncEnabled) return;
     this.disableTrafficExceededRunning = true;
     try {
       const result = await this.disableTrafficExceededNodes('schedule');
@@ -63,6 +78,29 @@ export class JobsService {
     } finally {
       this.disableTrafficExceededRunning = false;
     }
+  }
+
+  async jobSettings(): Promise<JobSettings> {
+    const row = await this.prisma.systemSetting.findUnique({ where: { key: JOB_SETTINGS_KEY } });
+    const value = this.objectValue(row?.value);
+    return {
+      disableExpiredEnabled: this.booleanValue(value.disableExpiredEnabled, DEFAULT_JOB_SETTINGS.disableExpiredEnabled),
+      trafficSyncEnabled: this.booleanValue(value.trafficSyncEnabled, DEFAULT_JOB_SETTINGS.trafficSyncEnabled)
+    };
+  }
+
+  async updateJobSettings(input: Partial<Record<keyof JobSettings, unknown>>) {
+    const current = await this.jobSettings();
+    const next: JobSettings = {
+      disableExpiredEnabled: input.disableExpiredEnabled === undefined ? current.disableExpiredEnabled : this.booleanValue(input.disableExpiredEnabled, current.disableExpiredEnabled),
+      trafficSyncEnabled: input.trafficSyncEnabled === undefined ? current.trafficSyncEnabled : this.booleanValue(input.trafficSyncEnabled, current.trafficSyncEnabled)
+    };
+    await this.prisma.systemSetting.upsert({
+      where: { key: JOB_SETTINGS_KEY },
+      create: { key: JOB_SETTINGS_KEY, value: this.toJsonValue(next) },
+      update: { value: this.toJsonValue(next) }
+    });
+    return next;
   }
 
   async disableExpiredNodes(trigger = 'manual') {
@@ -217,6 +255,21 @@ export class JobsService {
 
   private objectValue(value: unknown): Record<string, unknown> {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  }
+
+  private booleanValue(value: unknown, fallback: boolean) {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'number') return value !== 0;
+    if (typeof value === 'string') {
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+    }
+    return fallback;
+  }
+
+  private toJsonValue(value: unknown): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
   }
 
   private errorMessage(error: unknown) {

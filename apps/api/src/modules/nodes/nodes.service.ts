@@ -112,7 +112,8 @@ export class NodesService {
         encryption: input.encryption,
         enabled: input.enabled,
         port: input.inboundPort,
-        remark: input.remark || null
+        remark: input.remark || null,
+        trafficLimitGb: new Prisma.Decimal(input.trafficLimitGb)
       });
       inboundId = remoteCreated.inboundId;
       remoteClient = { email: remoteCreated.remoteClientEmail, uuid: remoteCreated.remoteClientUuid, subId: remoteCreated.remoteClientSubId };
@@ -169,6 +170,7 @@ export class NodesService {
     const nextEnabled = input.enabled ?? current.enabled;
     const nextRemotePort = input.inboundPort === undefined ? previousConfig.remoteInboundPort : input.inboundPort;
     const nextRemark = input.remark === undefined ? current.remark : input.remark || null;
+    const trafficLimitChanged = input.trafficLimitGb !== undefined && Number(input.trafficLimitGb) !== Number(current.trafficLimitGb);
 
     if (remoteMode === 'bind') {
       if (!inboundId) throw new BadRequestException('绑定已有入站时必须填写入站 ID');
@@ -184,7 +186,8 @@ export class NodesService {
         encryption: nextEncryption,
         enabled: nextEnabled,
         port: input.inboundPort,
-        remark: nextRemark
+        remark: nextRemark,
+        trafficLimitGb: input.trafficLimitGb === undefined ? current.trafficLimitGb : new Prisma.Decimal(input.trafficLimitGb)
       });
       inboundId = remoteCreated.inboundId;
       remoteClient = { email: remoteCreated.remoteClientEmail, uuid: remoteCreated.remoteClientUuid, subId: remoteCreated.remoteClientSubId };
@@ -249,7 +252,7 @@ export class NodesService {
           });
         }
       }
-      return await this.prisma.serviceNode.update({
+      const updated = await this.prisma.serviceNode.update({
         where: { id },
         data: {
           serverId: input.serverId,
@@ -264,6 +267,14 @@ export class NodesService {
         },
         include: { server: { select: { id: true, name: true, baseUrl: true, enabled: true } } }
       });
+      if (trafficLimitChanged && updated.inboundId) {
+        await this.prisma.customerNode.updateMany({
+          where: { serviceNodeId: id },
+          data: { trafficLimitGb: updated.trafficLimitGb }
+        });
+        await this.xui.syncServiceNodeTrafficLimit(id);
+      }
+      return updated;
     } catch (error) {
       if (remoteCreated) await this.xui.deleteRemoteInbound(nextServerId, remoteCreated.inboundId).catch(() => undefined);
       throw error;
@@ -283,6 +294,16 @@ export class NodesService {
       this.prisma.serviceNode.delete({ where: { id } })
     ]);
     return { deleted: true, id, remoteClientCleanup, remoteInboundCleanup };
+  }
+
+  async syncServiceNodeTrafficLimit(id: string) {
+    const node = await this.prisma.serviceNode.findUnique({ where: { id }, select: { id: true, inboundId: true, trafficLimitGb: true } });
+    if (!node) throw new NotFoundException('Service node not found');
+    await this.prisma.customerNode.updateMany({
+      where: { serviceNodeId: id },
+      data: { trafficLimitGb: node.trafficLimitGb }
+    });
+    return this.xui.syncServiceNodeTrafficLimit(id);
   }
 
   async listSocksNodes() {
@@ -453,7 +474,7 @@ export class NodesService {
   }
 
   private async ensureServiceNode(id: string) {
-    const exists = await this.prisma.serviceNode.findUnique({ where: { id }, select: { id: true, serverId: true, name: true, protocol: true, inboundId: true, enabled: true, remark: true, config: true } });
+    const exists = await this.prisma.serviceNode.findUnique({ where: { id }, select: { id: true, serverId: true, name: true, protocol: true, inboundId: true, enabled: true, trafficLimitGb: true, remark: true, config: true } });
     if (!exists) throw new NotFoundException('Service node not found');
     return exists;
   }

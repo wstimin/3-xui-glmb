@@ -46,6 +46,7 @@ type CreateServiceInboundInput = {
   enabled: boolean;
   port?: number;
   remark?: string | null;
+  trafficLimitGb?: Prisma.Decimal | number | string | null;
 };
 
 type UpdateServiceInboundInput = CreateServiceInboundInput & {
@@ -253,7 +254,7 @@ export class XuiService {
       email: remoteClientEmail,
       enabled: input.enabled,
       expireAt: null,
-      trafficLimitGb: 0,
+      trafficLimitGb: input.trafficLimitGb ?? 0,
       flow: this.clientFlowForProtocol(input.protocol, input.encryption || 'none')
     });
     let clientResponse: unknown;
@@ -362,6 +363,82 @@ export class XuiService {
       response: this.toJsonValue(response)
     });
     return { synced: true, serviceNodeId, inboundId: serviceNode.inboundId, enable, response };
+  }
+
+  async syncServiceNodeTrafficLimit(serviceNodeId: string) {
+    const serviceNode = await this.prisma.serviceNode.findUnique({
+      where: { id: serviceNodeId },
+      include: {
+        server: true,
+        customerNodes: { select: { id: true, customerId: true, status: true } }
+      }
+    });
+    if (!serviceNode) throw new NotFoundException('Service node not found');
+    if (!serviceNode.inboundId) throw new BadRequestException('Service node missing 3x-ui inbound ID');
+
+    const client = await this.createAuthenticatedClient(serviceNode.server);
+    const rawInbounds = await client.listInbounds();
+    this.assertXuiSuccess(rawInbounds);
+    const inbounds = this.xuiArray(rawInbounds);
+    const config = this.xuiObject(serviceNode.config) as ServiceNodeConfig;
+    const remoteClientEmail = this.stringValue(config.remoteClientEmail);
+    const remoteClientUuid = this.stringValue(config.remoteClientUuid);
+    const remoteClientSubId = this.stringValue(config.remoteClientSubId);
+    const results: Array<{ target: string; updated: boolean; skipped?: boolean; message?: string }> = [];
+
+    if (remoteClientEmail || remoteClientUuid || remoteClientSubId) {
+      try {
+        const existing = await this.findClient(client, { email: remoteClientEmail, uuid: remoteClientUuid, subId: remoteClientSubId, inboundId: serviceNode.inboundId }, inbounds);
+        if (existing.exists) {
+          const uuid = existing.uuid || remoteClientUuid || randomUUID();
+          const subId = existing.subId || remoteClientSubId || this.subscriptionId(uuid);
+          const email = existing.email || remoteClientEmail || this.serviceClientEmail(serviceNode.name, serviceNode.inboundId);
+          const payload = await client.updateClient(existing.email || email, {
+            ...this.buildXuiClient({
+              uuid,
+              subId,
+              email,
+              enabled: serviceNode.enabled,
+              expireAt: null,
+              trafficLimitGb: serviceNode.trafficLimitGb,
+              flow: this.clientFlowForServiceNode(serviceNode)
+            }),
+            inboundIds: [serviceNode.inboundId]
+          });
+          this.assertXuiSuccess(payload);
+          results.push({ target: `service:${email}`, updated: true });
+        } else {
+          results.push({ target: 'service-client', updated: false, skipped: true, message: 'remote service client not found' });
+        }
+      } catch (error) {
+        results.push({ target: 'service-client', updated: false, message: this.errorMessage(error) });
+      }
+    } else {
+      results.push({ target: 'service-client', updated: false, skipped: true, message: 'service node has no remote client identity' });
+    }
+
+    for (const node of serviceNode.customerNodes) {
+      try {
+        await this.syncCustomerNode(node.customerId, node.id, { status: node.status, trafficLimitGb: serviceNode.trafficLimitGb, createIfMissing: false });
+        results.push({ target: `customer:${node.id}`, updated: true });
+      } catch (error) {
+        results.push({ target: `customer:${node.id}`, updated: false, message: this.errorMessage(error) });
+      }
+    }
+
+    const updated = results.filter((item) => item.updated).length;
+    const skipped = results.filter((item) => item.skipped).length;
+    const failed = results.length - updated - skipped;
+    await this.writeSyncLog(serviceNode.serverId, 'service-node-traffic-limit-sync', failed ? 'partial' : 'success', `Synced traffic limit for ${serviceNode.name}`, {
+      serviceNodeId,
+      inboundId: serviceNode.inboundId,
+      trafficLimitGb: String(serviceNode.trafficLimitGb),
+      updated,
+      skipped,
+      failed,
+      results
+    });
+    return { synced: failed === 0, serviceNodeId, inboundId: serviceNode.inboundId, trafficLimitGb: serviceNode.trafficLimitGb, updated, skipped, failed, results };
   }
 
   async resetServiceNodeTraffic(serviceNodeId: string) {

@@ -52,6 +52,11 @@ export class NodesController {
   @Roles('admin')
   deleteServiceNode(@Param('id') id: string) { return this.nodes.deleteServiceNode(id); }
 
+  @Post('admin/service-nodes/:id/sync-traffic-limit')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  syncServiceNodeTrafficLimit(@Param('id') id: string) { return this.nodes.syncServiceNodeTrafficLimit(id); }
+
   @Get('admin/socks-nodes')
   @UseGuards(AuthGuard)
   @Roles('admin')

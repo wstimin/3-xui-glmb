@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { RotateCcw, UploadCloud } from 'lucide-vue-next';
+import { Gauge, RotateCcw, UploadCloud } from 'lucide-vue-next';
 import { api } from '../api';
 
 type XuiServer = { id: string; name: string; baseUrl: string; enabled: boolean };
@@ -46,6 +46,7 @@ const nodes = ref<ServiceNode[]>([]);
 const loading = ref(false);
 const saving = ref(false);
 const syncingConfigIds = ref<Set<string>>(new Set());
+const syncingTrafficLimitIds = ref<Set<string>>(new Set());
 const resettingTrafficIds = ref<Set<string>>(new Set());
 const error = ref('');
 const editingId = ref('');
@@ -118,6 +119,26 @@ async function syncRemoteConfig(node: ServiceNode) {
     const next = new Set(syncingConfigIds.value);
     next.delete(node.id);
     syncingConfigIds.value = next;
+  }
+}
+
+async function syncTrafficLimit(node: ServiceNode) {
+  syncingTrafficLimitIds.value = new Set(syncingTrafficLimitIds.value).add(node.id);
+  error.value = '';
+  try {
+    const result = await api<{ updated: number; skipped: number; failed: number }>(`/api/admin/service-nodes/${node.id}/sync-traffic-limit`, { method: 'POST' });
+    if (result.failed > 0) {
+      ElMessage.warning(`流量额度已部分同步：成功 ${result.updated}，跳过 ${result.skipped}，失败 ${result.failed}`);
+    } else {
+      ElMessage.success(`流量额度已同步：成功 ${result.updated}，跳过 ${result.skipped}`);
+    }
+    await loadNodes();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '同步流量额度失败';
+  } finally {
+    const next = new Set(syncingTrafficLimitIds.value);
+    next.delete(node.id);
+    syncingTrafficLimitIds.value = next;
   }
 }
 
@@ -237,9 +258,10 @@ onMounted(loadNodes);
       <el-table-column label="状态" width="90">
         <template #default="{ row }: { row: ServiceNode }"><el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag></template>
       </el-table-column>
-      <el-table-column label="操作" width="420" fixed="right">
+      <el-table-column label="操作" width="520" fixed="right">
         <template #default="{ row }: { row: ServiceNode }">
           <el-button size="small" :loading="syncingConfigIds.has(row.id)" :disabled="!row.inboundId" @click="syncRemoteConfig(row)"><UploadCloud :size="15" />同步配置</el-button>
+          <el-button size="small" :loading="syncingTrafficLimitIds.has(row.id)" :disabled="!row.inboundId" @click="syncTrafficLimit(row)"><Gauge :size="15" />同步流量</el-button>
           <el-button size="small" :loading="resettingTrafficIds.has(row.id)" :disabled="!row.inboundId" @click="resetRemoteTraffic(row)"><RotateCcw :size="15" />重置流量</el-button>
           <el-button size="small" @click="editNode(row)">编辑</el-button>
           <el-button size="small" type="danger" @click="removeNode(row)">删除</el-button>
