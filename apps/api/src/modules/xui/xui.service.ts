@@ -265,7 +265,23 @@ export class XuiService {
       throw error;
     }
 
-    const links = await this.linksForClient(client, remoteClientEmail, remoteClientSubId).catch(() => [] as string[]);
+    let links: string[];
+    if (input.enabled) {
+      try {
+        links = await this.requireLinksForServiceNode(client, remoteClientEmail, remoteClientSubId, {
+          serverId: server.id,
+          inboundId,
+          serviceNodeName: input.name,
+          protocol: input.protocol,
+          encryption: input.encryption || 'none'
+        });
+      } catch (error) {
+        await this.cleanupFailedServiceNodeCreate(client, server.id, inboundId, remoteClientEmail, error);
+        throw error;
+      }
+    } else {
+      links = await this.linksForClient(client, remoteClientEmail, remoteClientSubId).catch(() => [] as string[]);
+    }
     await this.writeSyncLog(server.id, 'service-node-inbound-create', 'success', `Created inbound ${inboundId} for ${input.name}`, {
       inboundId,
       port,
@@ -1172,6 +1188,43 @@ export class XuiService {
     const subPayload = await client.subLinks(subId);
     this.assertXuiSuccess(subPayload);
     return this.extractLinks(subPayload);
+  }
+
+  private async requireLinksForServiceNode(
+    client: XuiClient,
+    email: string,
+    subId: string | undefined,
+    context: { serverId: string; inboundId: number; serviceNodeName: string; protocol: string; encryption: string }
+  ) {
+    try {
+      const links = await this.linksForClient(client, email, subId);
+      if (links.length) return links;
+      throw new Error('3x-ui returned an empty link list');
+    } catch (error) {
+      await this.writeSyncLog(context.serverId, 'service-node-link-verify', 'failed', this.errorMessage(error), {
+        inboundId: context.inboundId,
+        serviceNodeName: context.serviceNodeName,
+        protocol: context.protocol,
+        encryption: context.encryption,
+        remoteClientEmail: email,
+        remoteClientSubId: subId
+      });
+      const hint = context.encryption === 'reality' ? 'Reality 目标/SNI/ALPN' : '入站协议和客户端';
+      throw new BadGatewayException(`3x-ui 已创建入站和客户端，但没有返回可用节点链接。请检查 ${hint} 配置后重试：${this.errorMessage(error)}`);
+    }
+  }
+
+  private async cleanupFailedServiceNodeCreate(client: XuiClient, serverId: string, inboundId: number, email: string, cause: unknown) {
+    const detail: Record<string, unknown> = { inboundId, remoteClientEmail: email, cause: this.errorMessage(cause) };
+    detail.remoteClientCleanup = await this.deleteRemoteClientWithClient(client, serverId, email, false, { inboundId, action: 'service-node-create-rollback' })
+      .catch((error) => ({ deleted: false, message: this.errorMessage(error) }));
+    detail.inboundCleanup = await client.deleteInbound(inboundId)
+      .then((response) => {
+        this.assertXuiSuccess(response);
+        return { deleted: true, response: this.toJsonValue(response) };
+      })
+      .catch((error) => ({ deleted: false, message: this.errorMessage(error) }));
+    await this.writeSyncLog(serverId, 'service-node-inbound-create-rollback', 'failed', this.errorMessage(cause), detail);
   }
 
   private extractLinks(payload: unknown) {
