@@ -737,6 +737,91 @@ read_database_url() {
   grep -E '^DATABASE_URL=' "\${APP_DIR}/.env" | tail -n 1 | cut -d= -f2-
 }
 
+get_env_value() {
+  key="\$1"
+  [ -f "\${APP_DIR}/.env" ] || return 1
+  grep -E "^\${key}=" "\${APP_DIR}/.env" | tail -n 1 | sed "s|^\${key}=||"
+}
+
+show_secret_state() {
+  key="\$1"
+  value="\$(get_env_value "\${key}" || true)"
+  if [ -n "\${value}" ]; then
+    echo "\${key}：已设置"
+  else
+    echo "\${key}：未设置"
+  fi
+}
+
+show_database_config() {
+  db_url="\$(get_env_value DATABASE_URL || true)"
+  if [ -z "\${db_url}" ]; then
+    echo "数据库连接：未设置"
+    return
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    DATABASE_URL="\${db_url}" node -e 'try { const u = new URL(process.env.DATABASE_URL); const decode = (v) => decodeURIComponent(v || ""); console.log("数据库地址：" + (u.hostname || "127.0.0.1")); console.log("数据库端口：" + (u.port || "3306")); console.log("数据库名称：" + u.pathname.replace(/^\\//, "")); console.log("数据库用户：" + decode(u.username)); console.log("数据库密码：" + decode(u.password)); } catch (error) { console.log("DATABASE_URL：" + process.env.DATABASE_URL); }'
+  else
+    echo "DATABASE_URL：\${db_url}"
+  fi
+}
+
+show_current_config() {
+  env_file="\${APP_DIR}/.env"
+  echo "当前配置"
+  echo
+  echo "服务名：\${APP_NAME}"
+  echo "安装目录：\${APP_DIR}"
+  echo "环境文件：\${env_file}"
+  if systemctl list-unit-files "\${APP_NAME}.service" >/dev/null 2>&1; then
+    service_state="\$(systemctl is-active "\${APP_NAME}" 2>/dev/null || true)"
+    enabled_state="\$(systemctl is-enabled "\${APP_NAME}" 2>/dev/null || true)"
+    echo "服务状态：\${service_state:-unknown}"
+    echo "开机自启：\${enabled_state:-unknown}"
+  else
+    echo "服务状态：未安装"
+  fi
+  echo
+
+  if [ ! -f "\${env_file}" ]; then
+    echo "未找到 .env，请先安装项目。"
+    return
+  fi
+
+  configured_port="\$(get_env_value PORT || true)"
+  public_url="\$(get_env_value PUBLIC_WEB_URL || true)"
+  admin_path="\$(get_env_value ADMIN_PATH || true)"
+  admin_user="\$(get_env_value DEFAULT_ADMIN_USERNAME || true)"
+  admin_password="\$(get_env_value DEFAULT_ADMIN_PASSWORD || true)"
+  node_env="\$(get_env_value NODE_ENV || true)"
+
+  configured_port="\${configured_port:-\${PORT}}"
+  public_url="\${public_url:-http://\$(detect_server_ip):\${configured_port}}"
+  admin_path="\${admin_path:-/admin}"
+
+  echo "运行环境：\${node_env:-未设置}"
+  echo "监听端口：\${configured_port}"
+  echo "用户端地址：\${public_url}/"
+  echo "管理端地址：\${public_url}\${admin_path}/"
+  echo "健康检查：\${public_url}/api/health"
+  echo
+  echo "管理员账号：\${admin_user:-未设置}"
+  echo "管理员密码：\${admin_password:-未设置}"
+  echo
+  show_database_config
+  echo
+  show_secret_state SESSION_SECRET
+  show_secret_state ENCRYPTION_KEY
+  show_secret_state CARD_HASH_SECRET
+  echo
+  if [ -f "/etc/nginx/conf.d/\${APP_NAME}.conf" ] || [ -f "/etc/nginx/sites-enabled/\${APP_NAME}.conf" ]; then
+    echo "Nginx 配置：已配置"
+  else
+    echo "Nginx 配置：未检测到脚本创建的配置"
+  fi
+}
+
 backup_project() {
   backup_dir="/root/shiye-backup-\$(date +%Y%m%d%H%M%S)"
   mkdir -p "\${backup_dir}"
@@ -778,32 +863,34 @@ menu() {
 管理面板
 
 1. 安装/更新项目
-2. 查看服务状态
-3. 重启服务
-4. 查看运行日志
-5. 配置域名/Nginx/HTTPS
-6. 取消域名，仅使用 IP + 端口
-7. 重新构建前后端
-8. 执行数据库迁移
-9. 备份数据库和 .env
-10. 卸载项目
-11. 卸载项目并删除数据库
+2. 查看当前配置
+3. 查看服务状态
+4. 重启服务
+5. 查看运行日志
+6. 配置域名/Nginx/HTTPS
+7. 取消域名，仅使用 IP + 端口
+8. 重新构建前后端
+9. 执行数据库迁移
+10. 备份数据库和 .env
+11. 卸载项目
+12. 卸载项目并删除数据库
 0. 退出
 MENU
     echo
     read -r -p "请选择操作: " choice
     case "\${choice}" in
       1) run_remote_install; pause ;;
-      2) show_status; pause ;;
-      3) restart_service; pause ;;
-      4) show_logs ;;
-      5) configure_domain; pause ;;
-      6) remove_domain_access; pause ;;
-      7) rebuild_project; pause ;;
-      8) run_migration; pause ;;
-      9) backup_project; pause ;;
-      10) uninstall_project; pause ;;
-      11) uninstall_project_and_database; pause ;;
+      2) show_current_config; pause ;;
+      3) show_status; pause ;;
+      4) restart_service; pause ;;
+      5) show_logs ;;
+      6) configure_domain; pause ;;
+      7) remove_domain_access; pause ;;
+      8) rebuild_project; pause ;;
+      9) run_migration; pause ;;
+      10) backup_project; pause ;;
+      11) uninstall_project; pause ;;
+      12) uninstall_project_and_database; pause ;;
       0) exit 0 ;;
       *) echo "无效选项"; pause ;;
     esac
