@@ -53,7 +53,7 @@ onMounted(loadDashboard);
 
   <div class="quick-link-grid">
     <RouterLink to="/nodes" class="quick-link-card"><Network :size="20" /><strong>我的节点</strong><span>节点复制、二维码、余额续费</span></RouterLink>
-    <RouterLink to="/finance" class="quick-link-card"><WalletCards :size="20" /><strong>余额充值</strong><span>支付宝、微信、易支付、USDT</span></RouterLink>
+    <RouterLink to="/finance" class="quick-link-card"><WalletCards :size="20" /><strong>余额充值</strong><span>支付宝、微信、USDT</span></RouterLink>
     <RouterLink to="/finance" class="quick-link-card"><CreditCard :size="20" /><strong>卡密兑换</strong><span>购买卡密后在财务页兑换</span></RouterLink>
   </div>
 </template>
