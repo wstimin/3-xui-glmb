@@ -797,7 +797,15 @@ export class XuiService {
       const route = 'clients/update';
       const payload = await client.updateClient(existing.email || xuiEmail, xuiClient);
       this.assertXuiSuccess(payload);
-      const links = await this.linksForClient(client, xuiEmail, subId).catch(() => [] as string[]);
+      const links = targetStatus === 'active'
+        ? await this.requireLinksForServiceNode(client, xuiEmail, subId, {
+          serverId,
+          inboundId,
+          serviceNodeName: customerNode.serviceNode.name,
+          protocol: customerNode.serviceNode.protocol,
+          encryption: String(serviceConfig.encryption || 'none')
+        })
+        : await this.linksForClient(client, xuiEmail, subId).catch(() => [] as string[]);
       const syncedAt = new Date();
       const updatedNode = await this.prisma.customerNode.update({
         where: { id: customerNode.id },

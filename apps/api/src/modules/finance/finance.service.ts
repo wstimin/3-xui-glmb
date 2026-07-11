@@ -76,7 +76,12 @@ export class FinanceService {
 
     let syncResult: Awaited<ReturnType<XuiService['syncCustomerNode']>>;
     try {
-      syncResult = await this.xui.syncCustomerNode(customerId, customerNodeId, { expireAt: pending.afterExpireAt, status: 'active' });
+      syncResult = await this.xui.syncCustomerNode(customerId, customerNodeId, {
+        expireAt: pending.afterExpireAt,
+        status: 'active',
+        createIfMissing: false,
+        requireExisting: true
+      });
     } catch (error) {
       await this.refundFailedRenewal(customerId, pending, operator, error);
       throw error;
