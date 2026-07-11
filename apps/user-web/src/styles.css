@@ -55,26 +55,28 @@ button { transition: border-color 0.16s ease, background-color 0.16s ease, color
 .finance-form h2 { margin: 0 0 14px; font-size: 18px; }
 .finance-card-title { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .finance-card-title h2 { margin: 0; }
-.secondary-button { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #334155; padding: 0 12px; cursor: pointer; white-space: nowrap; }
+.secondary-button { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #334155; padding: 0 12px; cursor: pointer; white-space: nowrap; font-weight: 700; }
 .card-redeem-panel { display: grid; gap: 14px; }
 .card-redeem-head { display: grid; gap: 14px; }
 .card-redeem-title { min-width: 0; display: grid; grid-template-columns: 44px minmax(0, 1fr); align-items: center; gap: 12px; }
 .card-redeem-title h2 { margin: 0 0 4px; }
 .card-redeem-title p { margin: 0; color: #64748b; font-size: 13px; line-height: 1.5; }
 .card-redeem-icon { width: 44px; height: 44px; display: grid; place-items: center; border: 1px solid #bbf7d0; border-radius: 8px; background: #f0fdf4; color: #0f766e; }
-.card-buy-button { width: 100%; display: inline-flex; align-items: center; justify-content: center; gap: 7px; }
+.card-buy-button { width: 100%; height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border-color: #99f6e4; background: #f0fdfa; color: #0f766e; }
+.card-buy-button:hover { border-color: #0f766e; background: #ccfbf1; color: #0f513f; box-shadow: 0 0 0 3px rgb(15 118 110 / 8%); }
 .card-redeem-form { display: grid; grid-template-columns: minmax(0, 1fr) 112px; gap: 10px; }
 .card-redeem-tip { border: 1px solid #dfe7ef; border-radius: 8px; background: #f8fafc; padding: 10px 12px; color: #64748b; font-size: 13px; line-height: 1.45; }
 .amount-shortcuts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0 0 12px; }
-.amount-shortcuts button { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #334155; cursor: pointer; font-weight: 700; }
-.amount-shortcuts button.active { border-color: #0f766e; background: #ecfdf5; color: #0f513f; }
+.amount-shortcuts button { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #334155; cursor: pointer; font-weight: 800; }
+.amount-shortcuts button:hover { border-color: #14b8a6; color: #0f766e; box-shadow: 0 0 0 3px rgb(20 184 166 / 8%); }
+.amount-shortcuts button.active { border-color: #0f766e; background: #0f766e; color: #fff; box-shadow: 0 8px 18px rgb(15 118 110 / 18%); }
 .payment-method-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
 .payment-method-button { min-width: 0; min-height: 96px; display: grid; grid-template-rows: 30px minmax(20px, auto) 18px; justify-items: center; align-content: center; gap: 5px; border: 1px solid #d7dde8; border-radius: 8px; background: #fff; color: #334155; padding: 12px 8px; text-align: center; cursor: pointer; }
-.payment-method-button:hover:not(:disabled) { border-color: #0f766e; box-shadow: 0 0 0 3px rgb(15 118 110 / 8%); }
+.payment-method-button:hover:not(:disabled) { border-color: #14b8a6; background: #f0fdfa; box-shadow: 0 0 0 3px rgb(20 184 166 / 8%); }
 .payment-method-button svg, .payment-method-button img { width: 28px; height: 28px; color: #0f766e; object-fit: contain; }
 .payment-method-button span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1f2937; font-weight: 800; line-height: 20px; }
 .payment-method-button small { min-width: 0; color: #475569; font-size: 12px; font-weight: 700; line-height: 18px; }
-.payment-method-button.active { border-color: #0f766e; background: #ecfdf5; color: #0f513f; box-shadow: 0 0 0 3px rgb(15 118 110 / 10%); }
+.payment-method-button.active { border-color: #0f766e; background: #e6fffb; color: #0f513f; box-shadow: inset 0 0 0 1px #0f766e, 0 8px 18px rgb(15 118 110 / 14%); }
 .payment-method-button:disabled { opacity: 1; background: #f8fafc; color: #64748b; cursor: not-allowed; }
 .payment-method-button:disabled span { color: #64748b; }
 .payment-method-button:disabled svg, .payment-method-button:disabled small { color: #64748b; }
@@ -83,8 +85,9 @@ button { transition: border-color 0.16s ease, background-color 0.16s ease, color
 .finance-form .card-redeem-form { grid-template-columns: minmax(0, 1fr) 112px; }
 .finance-form input, .finance-form select { min-width: 0; height: 42px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 12px; background: #fff; outline: 0; }
 .finance-form input:focus, .finance-form select:focus, .renew-form select:focus, .password-form input:focus { border-color: #0f766e; box-shadow: 0 0 0 3px rgb(15 118 110 / 10%); }
-.finance-form button, .renew-form button, .password-form button { height: 42px; border: 0; border-radius: 8px; background: #0f766e; color: #fff; cursor: pointer; font-weight: 700; }
-.finance-form button:disabled, .renew-form button:disabled, .password-form button:disabled { opacity: 0.55; cursor: not-allowed; }
+.finance-form form button, .renew-form button, .password-form button { height: 42px; border: 0; border-radius: 8px; background: #0f766e; color: #fff; cursor: pointer; font-weight: 700; }
+.finance-form form button:hover:not(:disabled), .renew-form button:hover:not(:disabled), .password-form button:hover:not(:disabled) { background: #115e59; color: #fff; }
+.finance-form form button:disabled, .renew-form button:disabled, .password-form button:disabled { opacity: 0.55; cursor: not-allowed; }
 .empty-hint { margin-top: 12px; color: #64748b; font-size: 13px; line-height: 1.5; }
 .qr-box { margin-top: 14px; display: grid; justify-items: center; gap: 10px; padding: 14px; border: 1px dashed #cbd5e1; border-radius: 8px; word-break: break-all; background: #f8fafc; }
 .qr-box img { width: 220px; height: 220px; max-width: 100%; background: #fff; }
