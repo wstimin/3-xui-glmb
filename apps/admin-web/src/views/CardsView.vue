@@ -410,7 +410,6 @@ onMounted(loadCards);
                   <div v-for="card in batch.cards || []" :key="card.id" class="generated-code-row">
                     <code>{{ card.code || card.codePreview }}</code>
                     <el-tag size="small" :type="card.status === 'unused' ? 'success' : card.status === 'used' ? 'warning' : 'info'">{{ statusLabel(card.status) }}</el-tag>
-                    <el-button size="small" text :disabled="!card.code" @click="copyCodes(card.code ? [card.code] : [], '已复制卡密')"><Copy :size="14" />复制</el-button>
                   </div>
                 </div>
                 <div v-else class="batch-empty-detail">本批次没有可复制的完整卡密，或未使用卡密已被删除。</div>
