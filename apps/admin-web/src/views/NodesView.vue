@@ -106,6 +106,10 @@ const form = reactive({
 });
 
 const enabledSocksNodes = computed(() => socksNodes.value.filter((item) => item.enabled));
+const enabledNodeCount = computed(() => nodes.value.filter((item) => item.enabled).length);
+const remoteManagedNodeCount = computed(() => nodes.value.filter((item) => item.config?.remoteManaged).length);
+const socksRelayNodeCount = computed(() => nodes.value.filter((item) => item.config?.socksRelayEnabled).length);
+const inboundReadyNodeCount = computed(() => nodes.value.filter((item) => item.inboundId).length);
 
 async function loadNodes() {
   loading.value = true;
@@ -322,6 +326,13 @@ onMounted(loadNodes);
   </div>
   <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="page-alert" />
 
+  <div class="metric-grid compact-metrics">
+    <div class="metric"><span>路由节点</span><strong>{{ nodes.length }}</strong><small>启用 {{ enabledNodeCount }}</small></div>
+    <div class="metric"><span>远端入站</span><strong>{{ inboundReadyNodeCount }}</strong><small>已有入站 ID</small></div>
+    <div class="metric"><span>自动创建</span><strong>{{ remoteManagedNodeCount }}</strong><small>由本系统管理远端</small></div>
+    <div class="metric"><span>出站中转</span><strong>{{ socksRelayNodeCount }}</strong><small>启用 SOCKS 出站</small></div>
+  </div>
+
   <div class="panel list-panel">
     <div class="panel-toolbar">
       <strong>路由节点列表</strong>
@@ -356,12 +367,14 @@ onMounted(loadNodes);
       <el-table-column label="操作" width="440" fixed="right">
         <template #default="{ row }: { row: ServiceNode }">
           <div class="row-actions row-actions-split">
-            <div class="row-action-group">
+            <div class="row-action-group remote-action">
+              <span class="action-group-label">远端同步</span>
               <el-button size="small" :loading="syncingConfigIds.has(row.id)" :disabled="!row.inboundId" @click="syncRemoteConfig(row)"><UploadCloud :size="15" />出站</el-button>
-              <el-button size="small" :loading="syncingTrafficLimitIds.has(row.id)" :disabled="!row.inboundId" @click="syncTrafficLimit(row)"><Gauge :size="15" />流量</el-button>
-              <el-button size="small" :loading="resettingTrafficIds.has(row.id)" :disabled="!row.inboundId" @click="resetRemoteTraffic(row)"><RotateCcw :size="15" />重置</el-button>
+              <el-button size="small" :loading="syncingTrafficLimitIds.has(row.id)" :disabled="!row.inboundId" @click="syncTrafficLimit(row)"><Gauge :size="15" />流量额度</el-button>
+              <el-button size="small" :loading="resettingTrafficIds.has(row.id)" :disabled="!row.inboundId" @click="resetRemoteTraffic(row)"><RotateCcw :size="15" />重置流量</el-button>
             </div>
-            <div class="row-action-group">
+            <div class="row-action-group manage-action">
+              <span class="action-group-label">管理</span>
               <el-button size="small" @click="editNode(row)"><Edit3 :size="15" />编辑</el-button>
               <el-button size="small" type="danger" plain @click="removeNode(row)"><Trash2 :size="15" />删除</el-button>
             </div>

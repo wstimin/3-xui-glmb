@@ -99,6 +99,7 @@ const selectedCustomer = computed(() => customers.value.find((item) => item.id =
 const activeCustomerCount = computed(() => customers.value.filter((item) => item.status === 'active').length);
 const boundNodeCount = computed(() => customers.value.reduce((total, item) => total + (item.nodes?.length || 0), 0));
 const activeBoundNodeCount = computed(() => customers.value.reduce((total, item) => total + (item.nodes?.filter((node) => node.status === 'active').length || 0), 0));
+const expiredBoundNodeCount = computed(() => customers.value.reduce((total, item) => total + (item.nodes?.filter((node) => isExpiredNode(node)).length || 0), 0));
 
 async function loadCustomers() {
   loading.value = true;
@@ -452,6 +453,19 @@ function formatDate(value?: string | null) {
   return new Date(value).toLocaleString('zh-CN', { hour12: false });
 }
 
+function isExpiredNode(node: CustomerNode) {
+  if (!node.expireAt) return false;
+  return new Date(node.expireAt).getTime() <= Date.now();
+}
+
+function nodeExpireStatus(node: CustomerNode) {
+  if (!node.expireAt) return { label: '未设置到期', type: 'info' };
+  const expireTime = new Date(node.expireAt).getTime();
+  if (expireTime <= Date.now()) return { label: '已到期', type: 'danger' };
+  if (expireTime - Date.now() <= 7 * 24 * 60 * 60 * 1000) return { label: '临近到期', type: 'warning' };
+  return { label: '有效', type: 'success' };
+}
+
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return '-';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -494,7 +508,7 @@ onMounted(loadCustomers);
   <div class="metric-grid compact-metrics">
     <div class="metric"><span>面板用户</span><strong>{{ customers.length }}</strong><small>启用 {{ activeCustomerCount }}</small></div>
     <div class="metric"><span>绑定节点</span><strong>{{ boundNodeCount }}</strong><small>启用 {{ activeBoundNodeCount }}</small></div>
-    <div class="metric"><span>路由节点</span><strong>{{ serviceNodes.length }}</strong><small>可绑定节点</small></div>
+    <div class="metric"><span>到期绑定</span><strong>{{ expiredBoundNodeCount }}</strong><small>到期后会同步停用</small></div>
     <div class="metric"><span>余额操作</span><strong>手动</strong><small>支持增减和设置</small></div>
   </div>
 
@@ -526,12 +540,14 @@ onMounted(loadCustomers);
                       <strong class="node-title-line">
                         {{ node.serviceNode?.name || node.xuiEmail }}
                         <el-tag size="small" :type="node.status === 'active' ? 'success' : 'info'">{{ node.status === 'active' ? '启用' : '停用' }}</el-tag>
+                        <el-tag size="small" :type="nodeExpireStatus(node).type">{{ nodeExpireStatus(node).label }}</el-tag>
                       </strong>
                       <span>{{ node.serviceNode?.server?.name || '-' }} / {{ node.xuiEmail }}</span>
                       <span>到期 {{ formatDate(node.expireAt) }} · 流量 {{ node.trafficLimitGb ?? '-' }} GB · 同步 {{ formatDate(node.lastSyncedAt) }}</span>
                     </div>
                     <div class="node-actions node-action-grid">
                       <div class="node-action-group renew-action">
+                        <span class="action-group-label">续费</span>
                         <el-select v-model="renewMonths[node.id]" size="small" style="width: 82px">
                           <el-option :value="1" label="1月" />
                           <el-option :value="3" label="3月" />
@@ -540,23 +556,20 @@ onMounted(loadCustomers);
                         </el-select>
                         <el-button size="small" :loading="renewingIds.has(node.id)" @click="renewNode(row, node)">续费</el-button>
                       </div>
-                      <div class="node-action-group">
-                        <el-tooltip content="同步已有远端客户端" placement="top">
-                          <el-button circle size="small" :loading="syncingIds.has(node.id)" @click="syncNode(row, node)"><RefreshCw :size="15" /></el-button>
-                        </el-tooltip>
-                        <el-tooltip content="查看远端流量" placement="top">
-                          <el-button circle size="small" :loading="trafficIds.has(node.id)" @click="showNodeTraffic(row, node)"><Activity :size="15" /></el-button>
-                        </el-tooltip>
-                        <el-tooltip content="重置远端流量" placement="top">
-                          <el-button circle size="small" :loading="resettingTrafficIds.has(node.id)" @click="resetNodeTraffic(row, node)"><RotateCcw :size="15" /></el-button>
-                        </el-tooltip>
+                      <div class="node-action-group remote-action">
+                        <span class="action-group-label">远端</span>
+                        <el-button size="small" :loading="syncingIds.has(node.id)" @click="syncNode(row, node)"><RefreshCw :size="15" />同步</el-button>
+                        <el-button size="small" :loading="trafficIds.has(node.id)" @click="showNodeTraffic(row, node)"><Activity :size="15" />流量</el-button>
+                        <el-button size="small" :loading="resettingTrafficIds.has(node.id)" @click="resetNodeTraffic(row, node)"><RotateCcw :size="15" />重置</el-button>
                       </div>
                       <div class="node-action-group manage-action">
+                        <span class="action-group-label">本地绑定</span>
                         <el-button size="small" @click="editCustomerNode(row, node)"><Edit3 :size="15" />编辑</el-button>
                         <el-button size="small" @click="unbindNode(row, node)"><Unlink :size="15" />解绑</el-button>
                       </div>
                       <div class="node-action-group danger-action">
-                        <el-button size="small" type="danger" plain :loading="deletingServiceNodeIds.has(node.id)" @click="deleteBoundServiceNode(row, node)"><ServerOff :size="15" />删除节点</el-button>
+                        <span class="action-group-label">服务节点</span>
+                        <el-button size="small" type="danger" plain :loading="deletingServiceNodeIds.has(node.id)" @click="deleteBoundServiceNode(row, node)"><ServerOff :size="15" />删除本地和远端</el-button>
                       </div>
                     </div>
                   </div>

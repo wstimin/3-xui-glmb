@@ -75,7 +75,9 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .node-action-grid { justify-content: flex-end; flex-wrap: wrap; max-width: 560px; }
 .node-action-group { display: inline-flex; align-items: center; gap: 6px; padding: 3px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f8fafc; }
 .node-action-group .el-button { margin-left: 0; }
+.action-group-label { flex: 0 0 auto; padding: 0 5px; color: #64748b; font-size: 12px; font-weight: 700; }
 .renew-action { background: #fff; }
+.remote-action { background: #f8fbff; }
 .manage-action { background: #fbfdff; }
 .danger-action { border-color: #fee2e2; background: #fff7f7; }
 .row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
