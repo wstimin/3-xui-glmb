@@ -172,6 +172,10 @@ export class NodesService {
     const nextRemark = input.remark === undefined ? current.remark : input.remark || null;
     const nextRemoteRemark = nextName;
     const trafficLimitChanged = input.trafficLimitGb !== undefined && Number(input.trafficLimitGb) !== Number(current.trafficLimitGb);
+    const socksConfigChanged = Boolean(
+      input.socksRelayEnabled !== undefined && input.socksRelayEnabled !== Boolean(previousConfig.socksRelayEnabled) ||
+      input.socksNodeId !== undefined && (input.socksNodeId || null) !== (previousConfig.socksNodeId || null)
+    );
 
     if (remoteMode === 'bind') {
       if (!inboundId) throw new BadRequestException('绑定已有入站时必须填写入站 ID');
@@ -281,6 +285,9 @@ export class NodesService {
           throw new BadGatewayException(`路由节点已保存，但远端 3x-ui 客户端同步未全部成功：成功 ${syncResult.updated}，跳过 ${syncResult.skipped}，失败 ${syncResult.failed}`);
         }
       }
+      if (updated.inboundId && socksConfigChanged) {
+        await this.xui.syncServiceNodeRemoteConfig(id);
+      }
       return updated;
     } catch (error) {
       if (remoteCreated) await this.xui.deleteRemoteInbound(nextServerId, remoteCreated.inboundId).catch(() => undefined);
@@ -337,6 +344,17 @@ export class NodesService {
 
   async updateSocksNode(id: string, input: Partial<z.infer<typeof socksNodeUpsertSchema>>) {
     await this.ensureSocksNode(id);
+    const usedServiceNodes = await this.serviceNodesUsingSocksNode(id);
+    if (input.enabled === false && usedServiceNodes.length) {
+      throw new BadRequestException(`出站节点正在被 ${usedServiceNodes.length} 个路由节点使用，请先在路由节点中关闭或更换出站中转`);
+    }
+    const shouldResyncRemote = Boolean(
+      input.host !== undefined ||
+      input.port !== undefined ||
+      input.username !== undefined ||
+      input.password !== undefined ||
+      input.enabled !== undefined
+    );
     const node = await this.prisma.socksNode.update({
       where: { id },
       data: {
@@ -349,7 +367,21 @@ export class NodesService {
         remark: input.remark === undefined ? undefined : input.remark || null
       }
     });
-    return maskSocksNode(node);
+    const syncResults = shouldResyncRemote
+      ? await Promise.all(usedServiceNodes.map(async (serviceNode) => {
+        try {
+          const result = await this.xui.syncServiceNodeRemoteConfig(serviceNode.id);
+          return { serviceNodeId: serviceNode.id, serviceNodeName: serviceNode.name, synced: true, result };
+        } catch (error) {
+          return { serviceNodeId: serviceNode.id, serviceNodeName: serviceNode.name, synced: false, message: error instanceof Error ? error.message : String(error) };
+        }
+      }))
+      : [];
+    const failed = syncResults.filter((item) => !item.synced);
+    if (failed.length) {
+      throw new BadGatewayException(`出站节点已保存，但 ${failed.length} 个路由节点同步远端失败：${failed.map((item) => item.serviceNodeName).join('、')}`);
+    }
+    return { ...maskSocksNode(node), syncResults };
   }
 
   async deleteSocksNode(id: string) {
@@ -548,6 +580,14 @@ export class NodesService {
   private async ensureSocksNode(id: string) {
     const exists = await this.prisma.socksNode.findUnique({ where: { id }, select: { id: true } });
     if (!exists) throw new NotFoundException('Socks node not found');
+  }
+
+  private async serviceNodesUsingSocksNode(id: string) {
+    const serviceNodes = await this.prisma.serviceNode.findMany({ select: { id: true, name: true, config: true } });
+    return serviceNodes.filter((node) => {
+      const config = jsonObject(node.config) as ServiceNodeConfig;
+      return Boolean(config.socksRelayEnabled && config.socksNodeId === id);
+    });
   }
 
   private assertShareLinkProtocol(protocol: string) {

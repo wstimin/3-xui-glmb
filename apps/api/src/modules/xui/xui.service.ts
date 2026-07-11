@@ -237,6 +237,8 @@ export class XuiService {
     const outboundTestUrl = typeof xrayObj.outboundTestUrl === 'string' ? xrayObj.outboundTestUrl : undefined;
     const response = await client.updateXrayConfig({ xraySetting: JSON.stringify(nextConfig, null, 2), outboundTestUrl });
     this.assertXuiSuccess(response);
+    const reloadResponse = await client.restartXrayService();
+    this.assertXuiSuccess(reloadResponse);
     await this.writeSyncLog(serviceNode.serverId, 'service-node-config-sync', 'success', `Service node ${serviceNode.name} remote config ${action}`, {
       serviceNodeId,
       inboundId: serviceNode.inboundId,
@@ -244,7 +246,8 @@ export class XuiService {
       outboundTag,
       action,
       socks: socksDetail,
-      response: this.toJsonValue(response)
+      response: this.toJsonValue(response),
+      reloadResponse: this.toJsonValue(reloadResponse)
     });
     return { synced: true, action, serviceNodeId, inboundId: serviceNode.inboundId, inboundTag, outboundTag, socks: socksDetail };
   }

@@ -174,6 +174,10 @@ export class XuiClient {
     return this.formRequest('/panel/api/xray/update', { method: 'POST', body });
   }
 
+  restartXrayService() {
+    return this.request('/panel/api/server/restartXrayService', { method: 'POST' });
+  }
+
   serverStatus() {
     return this.request('/panel/api/server/status');
   }
