@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { xuiServerUpsertSchema } from '@shiye/shared';
 import type { z } from 'zod';
 import { AuthGuard } from '../../shared/auth.guard.js';
@@ -29,6 +29,13 @@ export class XuiController {
   @UseGuards(AuthGuard)
   @Roles('admin')
   storedServerClientPresence(@Param('id') id: string) { return this.xui.storedServerClientPresence(id); }
+
+  @Get('admin/sync-logs')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  syncLogs(@Query() query: { serverId?: string; action?: string; status?: string; limit?: string }) {
+    return this.xui.syncLogs(query);
+  }
 
   @Post('admin/xui-servers/:id/sync')
   @UseGuards(AuthGuard)

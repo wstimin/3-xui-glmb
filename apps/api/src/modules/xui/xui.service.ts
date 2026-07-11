@@ -25,6 +25,13 @@ type SyncOptions = {
   requireExisting?: boolean;
 };
 
+type SyncLogQuery = {
+  serverId?: string;
+  action?: string;
+  status?: string;
+  limit?: unknown;
+};
+
 type ServiceNodeConfig = {
   encryption?: string;
   socksRelayEnabled?: boolean;
@@ -135,6 +142,35 @@ export class XuiService {
       online: this.xuiArray(onlinePayload),
       lastOnline: this.xuiObject(this.xuiObject(lastOnlinePayload).obj || this.xuiObject(lastOnlinePayload).data || lastOnlinePayload),
       raw: { online: onlinePayload, lastOnline: lastOnlinePayload }
+    };
+  }
+
+  async syncLogs(query: SyncLogQuery = {}) {
+    const limit = Math.min(Math.max(Number(query.limit || 100), 1), 300);
+    const where: Prisma.SyncLogWhereInput = {
+      serverId: query.serverId || undefined,
+      action: query.action || undefined,
+      status: query.status || undefined
+    };
+    const [items, actions, statuses, servers] = await Promise.all([
+      this.prisma.syncLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        include: { server: { select: { id: true, name: true, baseUrl: true } } }
+      }),
+      this.prisma.syncLog.findMany({ distinct: ['action'], select: { action: true }, orderBy: { action: 'asc' } }),
+      this.prisma.syncLog.findMany({ distinct: ['status'], select: { status: true }, orderBy: { status: 'asc' } }),
+      this.prisma.xuiServer.findMany({ orderBy: { createdAt: 'desc' }, select: { id: true, name: true, baseUrl: true } })
+    ]);
+
+    return {
+      items,
+      filters: {
+        actions: actions.map((item) => item.action),
+        statuses: statuses.map((item) => item.status),
+        servers
+      }
     };
   }
 
