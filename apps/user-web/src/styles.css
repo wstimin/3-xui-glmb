@@ -36,6 +36,15 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .finance-card-title { min-height: 32px; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .finance-card-title h2 { margin: 0; }
 .secondary-button { height: 34px; border: 1px solid #cbd5e1; border-radius: 6px; background: #fff; color: #334155; padding: 0 12px; cursor: pointer; white-space: nowrap; }
+.payment-method-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.payment-method-button { min-width: 0; min-height: 72px; display: grid; grid-template-columns: 22px minmax(0, 1fr); grid-template-rows: 1fr 1fr; align-items: center; column-gap: 8px; border: 1px solid #d7dde8; border-radius: 8px; background: #fff; color: #334155; padding: 10px; text-align: left; cursor: pointer; }
+.payment-method-button svg, .payment-method-button img { grid-row: 1 / span 2; width: 22px; height: 22px; color: #0f766e; object-fit: contain; }
+.payment-method-button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.payment-method-button small { min-width: 0; color: #64748b; font-size: 12px; }
+.payment-method-button.active { border-color: #0f766e; background: #ecfdf5; color: #0f513f; }
+.payment-method-button:disabled { background: #f8fafc; color: #94a3b8; cursor: not-allowed; }
+.payment-method-button:disabled svg, .payment-method-button:disabled small { color: #94a3b8; }
+.payment-method-button:disabled img { filter: grayscale(1); opacity: 0.5; }
 .finance-form form { display: flex; gap: 10px; }
 .finance-form input, .finance-form select { min-width: 0; flex: 1; height: 40px; border: 1px solid #cbd5e1; border-radius: 6px; padding: 0 12px; background: #fff; }
 .finance-form button { width: 96px; height: 40px; border: 0; border-radius: 6px; background: #0f766e; color: #fff; cursor: pointer; }

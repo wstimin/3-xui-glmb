@@ -3,7 +3,6 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { api } from '../api';
 
-type PaymentCategory = 'official' | 'aggregate' | 'crypto';
 type PaymentProvider = 'alipay' | 'wechat' | 'epay' | 'bepusdt';
 type PaymentChannel = {
   id: string;
@@ -20,17 +19,11 @@ type PaymentChannel = {
   notifyUrl?: string;
 };
 
-const categoryOptions = [
-  { label: '官方支付', value: 'official' },
-  { label: '聚合支付', value: 'aggregate' },
-  { label: '数字货币', value: 'crypto' }
-] as const;
-
 const providerOptions = [
-  { label: '支付宝官方', value: 'alipay', category: 'official' },
-  { label: '微信支付 Native', value: 'wechat', category: 'official' },
-  { label: '易支付', value: 'epay', category: 'aggregate' },
-  { label: 'BEpusdt', value: 'bepusdt', category: 'crypto' }
+  { label: '支付宝', value: 'alipay' },
+  { label: '微信支付', value: 'wechat' },
+  { label: '易支付', value: 'epay' },
+  { label: 'BEpusdt', value: 'bepusdt' }
 ] as const;
 
 const alipayModeOptions = [
@@ -42,6 +35,7 @@ const alipayModeOptions = [
 const epayTypeOptions = [
   { label: '支付宝', value: 'alipay' },
   { label: '微信', value: 'wechat' },
+  { label: 'PayPal', value: 'paypal' },
   { label: 'QQ 钱包', value: 'qqpay' },
   { label: '银行卡', value: 'bank' }
 ] as const;
@@ -56,12 +50,11 @@ const channels = ref<PaymentChannel[]>([]);
 const editingChannelId = ref('');
 const channelDialogVisible = ref(false);
 const channelForm = reactive({
-  category: 'aggregate' as PaymentCategory,
-  provider: 'epay' as PaymentProvider,
-  name: '易支付',
+  provider: 'alipay' as PaymentProvider,
+  name: '支付宝',
   enabled: false,
   sortOrder: 0,
-  url: '',
+  url: 'https://openapi.alipay.com/gateway.do',
   pid: '',
   key: '',
   token: '',
@@ -71,12 +64,11 @@ const channelForm = reactive({
   productName: '账户余额充值',
   mchId: '',
   apiKey: '',
-  type: 'alipay',
+  type: 'precreate',
   notifyUrl: '',
   returnUrl: ''
 });
 
-const providerChoices = computed(() => providerOptions.filter((item) => item.category === channelForm.category));
 const callbackOrigin = computed(() => window.location.origin.replace(/\/+$/, ''));
 const callbackUrl = computed(() => `${callbackOrigin.value}/api/payments/${channelForm.provider}/notify`);
 const secretLabel = computed(() => {
@@ -164,20 +156,19 @@ function channelBody() {
   };
 }
 
-function openChannelDialog() {
-  resetChannelForm();
+function openChannelDialog(provider?: PaymentProvider) {
+  resetChannelForm(provider);
   channelDialogVisible.value = true;
 }
 
 function editChannel(channel: PaymentChannel) {
   editingChannelId.value = channel.id;
   Object.assign(channelForm, {
-    category: providerCategory(channel.provider),
     provider: channel.provider,
     name: channel.name,
     enabled: channel.enabled,
     sortOrder: channel.sortOrder,
-    url: channel.config.url || '',
+    url: channel.config.url || defaultUrl(channel.provider),
     pid: channel.config.pid || '',
     key: '',
     token: '',
@@ -202,15 +193,14 @@ async function removeChannel(channel: PaymentChannel) {
   await loadChannels();
 }
 
-function resetChannelForm() {
+function resetChannelForm(provider: PaymentProvider = 'alipay') {
   editingChannelId.value = '';
   Object.assign(channelForm, {
-    category: 'aggregate',
-    provider: 'epay',
-    name: '易支付',
+    provider,
+    name: providerName(provider),
     enabled: false,
     sortOrder: 0,
-    url: '',
+    url: defaultUrl(provider),
     pid: '',
     key: '',
     token: '',
@@ -220,26 +210,23 @@ function resetChannelForm() {
     productName: '账户余额充值',
     mchId: '',
     apiKey: '',
-    type: 'alipay',
+    type: defaultType(provider),
     notifyUrl: '',
     returnUrl: ''
   });
-}
-
-function onCategoryChange() {
-  const first = providerChoices.value[0];
-  if (first) onProviderChange(first.value);
 }
 
 function onProviderChange(provider: PaymentProvider) {
   channelForm.provider = provider;
   channelForm.name = providerName(provider);
   channelForm.type = defaultType(provider);
-  channelForm.url = provider === 'alipay'
-    ? 'https://openapi.alipay.com/gateway.do'
-    : provider === 'wechat'
-      ? 'https://api.mch.weixin.qq.com/pay/unifiedorder'
-      : '';
+  channelForm.url = defaultUrl(provider);
+}
+
+function defaultUrl(provider: PaymentProvider) {
+  if (provider === 'alipay') return 'https://openapi.alipay.com/gateway.do';
+  if (provider === 'wechat') return 'https://api.mch.weixin.qq.com/pay/unifiedorder';
+  return '';
 }
 
 function defaultType(provider: PaymentProvider) {
@@ -249,21 +236,12 @@ function defaultType(provider: PaymentProvider) {
   return 'NATIVE';
 }
 
-function providerCategory(provider: PaymentProvider): PaymentCategory {
-  return providerOptions.find((item) => item.value === provider)?.category || 'aggregate';
-}
-
 function providerName(provider: PaymentProvider) {
   return providerOptions.find((item) => item.value === provider)?.label || provider;
 }
 
-function categoryName(provider: PaymentProvider) {
-  const category = providerCategory(provider);
-  return categoryOptions.find((item) => item.value === category)?.label || category;
-}
-
 function paymentTypeLabel(provider: PaymentProvider) {
-  if (provider === 'alipay') return '支付宝接口';
+  if (provider === 'alipay') return '支付模式';
   if (provider === 'epay') return '支付子类';
   if (provider === 'bepusdt') return '币种网络';
   return '接口类型';
@@ -287,24 +265,27 @@ onMounted(loadChannels);
     <div class="panel-toolbar">
       <strong>支付方式列表</strong>
       <div class="table-toolbar-actions">
-        <el-button type="primary" @click="openChannelDialog">新增支付方式</el-button>
+        <el-button @click="openChannelDialog('alipay')">添加支付宝</el-button>
+        <el-button @click="openChannelDialog('wechat')">添加微信支付</el-button>
+        <el-button @click="openChannelDialog('epay')">添加易支付</el-button>
+        <el-button @click="openChannelDialog('bepusdt')">添加 BEpusdt</el-button>
         <el-button :loading="loading" @click="loadChannels">刷新</el-button>
       </div>
     </div>
     <el-table :data="channels" v-loading="loading" style="width: 100%">
       <el-table-column label="名称" min-width="140"><template #default="{ row }: { row: PaymentChannel }">{{ row.name }}</template></el-table-column>
-      <el-table-column label="大类" width="110"><template #default="{ row }: { row: PaymentChannel }">{{ categoryName(row.provider) }}</template></el-table-column>
-      <el-table-column label="方式" width="130"><template #default="{ row }: { row: PaymentChannel }">{{ providerName(row.provider) }}</template></el-table-column>
-      <el-table-column label="子类" width="110"><template #default="{ row }: { row: PaymentChannel }">{{ row.config.type || '-' }}</template></el-table-column>
+      <el-table-column label="支付方式" width="130"><template #default="{ row }: { row: PaymentChannel }">{{ providerName(row.provider) }}</template></el-table-column>
+      <el-table-column label="子类/模式" width="120"><template #default="{ row }: { row: PaymentChannel }">{{ row.config.type || '-' }}</template></el-table-column>
       <el-table-column label="密钥" width="100"><template #default="{ row }: { row: PaymentChannel }">{{ secretState(row) }}</template></el-table-column>
-      <el-table-column label="启用" width="100">
+      <el-table-column label="状态" width="100">
         <template #default="{ row }: { row: PaymentChannel }">
-          <el-switch v-model="row.enabled" :loading="togglingIds.has(row.id)" @change="(value: boolean | string | number) => toggleChannel(row, value)" />
+          <el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '已启用' : '未启用' }}</el-tag>
         </template>
       </el-table-column>
       <el-table-column label="回调地址" min-width="260"><template #default="{ row }: { row: PaymentChannel }">{{ row.notifyUrl }}</template></el-table-column>
-      <el-table-column label="操作" width="150" fixed="right">
+      <el-table-column label="操作" width="230" fixed="right">
         <template #default="{ row }: { row: PaymentChannel }">
+          <el-button size="small" :type="row.enabled ? 'warning' : 'success'" :loading="togglingIds.has(row.id)" @click="toggleChannel(row, !row.enabled)">{{ row.enabled ? '停用' : '启用' }}</el-button>
           <el-button size="small" @click="editChannel(row)">编辑</el-button>
           <el-button size="small" type="danger" @click="removeChannel(row)">删除</el-button>
         </template>
@@ -312,23 +293,18 @@ onMounted(loadChannels);
     </el-table>
   </div>
 
-  <el-dialog v-model="channelDialogVisible" :title="editingChannelId ? '编辑支付方式' : '新增支付方式'" width="860px" destroy-on-close>
+  <el-dialog v-model="channelDialogVisible" :title="editingChannelId ? '编辑支付方式' : `新增${providerName(channelForm.provider)}`" width="860px" destroy-on-close>
     <el-form :model="channelForm" label-width="108px" class="payment-dialog-form">
-      <el-form-item label="支付大类">
-        <el-select v-model="channelForm.category" style="width: 100%" :disabled="Boolean(editingChannelId)" @change="onCategoryChange">
-          <el-option v-for="item in categoryOptions" :key="item.value" :label="item.label" :value="item.value" />
-        </el-select>
-      </el-form-item>
       <el-form-item label="支付方式">
         <el-select v-model="channelForm.provider" style="width: 100%" :disabled="Boolean(editingChannelId)" @change="onProviderChange">
-          <el-option v-for="item in providerChoices" :key="item.value" :label="item.label" :value="item.value" />
+          <el-option v-for="item in providerOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
       </el-form-item>
       <el-form-item v-if="typeOptions.length" :label="paymentTypeLabel(channelForm.provider)">
         <el-select v-model="channelForm.type" style="width: 100%"><el-option v-for="item in typeOptions" :key="item.value" :label="item.label" :value="item.value" /></el-select>
       </el-form-item>
       <el-form-item label="显示名称"><el-input v-model="channelForm.name" /></el-form-item>
-      <el-form-item label="接口地址"><el-input v-model="channelForm.url" placeholder="官方接口可保留默认值" /></el-form-item>
+      <el-form-item label="接口地址"><el-input v-model="channelForm.url" placeholder="支付宝/微信可保留默认地址；易支付和 BEpusdt 请填写你的接口地址" /></el-form-item>
       <el-form-item v-if="channelForm.provider === 'epay'" label="商户号"><el-input v-model="channelForm.pid" /></el-form-item>
       <el-form-item v-if="channelForm.provider === 'alipay' || channelForm.provider === 'wechat'" label="AppID"><el-input v-model="channelForm.appId" /></el-form-item>
       <el-form-item v-if="channelForm.provider === 'wechat'" label="商户号"><el-input v-model="channelForm.mchId" /></el-form-item>
@@ -340,7 +316,7 @@ onMounted(loadChannels);
         <el-input v-else-if="channelForm.provider === 'bepusdt'" v-model="channelForm.token" type="password" show-password placeholder="编辑时留空表示不修改已保存 Token" />
         <el-input v-else v-model="channelForm.apiKey" type="password" show-password placeholder="编辑时留空表示不修改已保存 V2 API 密钥" />
       </el-form-item>
-      <el-form-item label="回调地址"><el-input :model-value="callbackUrl" readonly /></el-form-item>
+      <el-form-item label="系统回调"><el-input :model-value="callbackUrl" readonly /></el-form-item>
       <el-form-item label="自定义回调"><el-input v-model="channelForm.notifyUrl" placeholder="通常留空，系统使用当前域名生成" /></el-form-item>
       <el-form-item label="返回地址"><el-input v-model="channelForm.returnUrl" placeholder="通常留空，系统使用用户支付结果页" /></el-form-item>
       <el-form-item label="排序"><el-input-number v-model="channelForm.sortOrder" :min="0" :max="9999" style="width: 100%" /></el-form-item>

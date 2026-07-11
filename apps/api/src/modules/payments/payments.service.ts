@@ -38,11 +38,15 @@ export class PaymentsService {
       where: { enabled: true, provider: { in: ['alipay', 'wechat', 'epay', 'bepusdt'] } },
       orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }]
     });
-    return channels.map((channel) => ({
-      id: channel.id,
-      provider: channel.provider,
-      name: channel.name
-    }));
+    return channels.map((channel) => {
+      const config = this.configObject(channel.configEnc);
+      return {
+        id: channel.id,
+        provider: channel.provider,
+        name: channel.name,
+        type: text(config.type)
+      };
+    });
   }
 
   async adminChannels() {

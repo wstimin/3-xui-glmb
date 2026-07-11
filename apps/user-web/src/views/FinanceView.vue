@@ -1,10 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import QRCode from 'qrcode';
+import { Banknote } from 'lucide-vue-next';
 import { api } from '../api';
+import alipayIcon from '../assets/payments/alipay.webp';
+import paypalIcon from '../assets/payments/paypal.webp';
+import usdtIcon from '../assets/payments/usdt.webp';
+import wechatIcon from '../assets/payments/wechat.jpg';
 
 type PaymentProvider = 'alipay' | 'wechat' | 'epay' | 'bepusdt';
-type PaymentChannel = { id: string; provider: PaymentProvider; name: string };
+type PaymentChannel = { id: string; provider: PaymentProvider; name: string; type?: string };
+type PaymentMethod = {
+  provider: PaymentProvider;
+  label: string;
+  channel?: PaymentChannel;
+  image?: string;
+  icon?: typeof Banknote;
+};
 type RechargeOrder = { order: { tradeNo: string; amount: string }; payUrl?: string | null; qrCode?: string | null };
 type PublicSettings = { cardPurchaseUrl?: string };
 
@@ -16,11 +28,17 @@ const message = ref('');
 const error = ref('');
 const channels = ref<PaymentChannel[]>([]);
 const publicSettings = reactive({ cardPurchaseUrl: '' });
-const rechargeForm = reactive({ amount: 10, channelId: '', provider: 'epay' as PaymentProvider });
+const rechargeForm = reactive({ amount: 10, channelId: '', provider: 'alipay' as PaymentProvider });
 const lastOrder = ref<RechargeOrder | null>(null);
 const qrImage = ref('');
 
 const selectedChannel = computed(() => channels.value.find((item) => item.id === rechargeForm.channelId));
+const paymentMethods = computed<PaymentMethod[]>(() => ([
+  { provider: 'alipay' as const, label: '支付宝', image: alipayIcon, channel: channelForProvider('alipay') },
+  { provider: 'wechat' as const, label: '微信支付', image: wechatIcon, channel: channelForProvider('wechat') },
+  epayMethod(),
+  { provider: 'bepusdt' as const, label: 'BEpusdt', image: usdtIcon, channel: channelForProvider('bepusdt') }
+]));
 
 async function loadFinanceData() {
   loading.value = true;
@@ -41,6 +59,23 @@ async function loadFinanceData() {
   } finally {
     loading.value = false;
   }
+}
+
+function channelForProvider(provider: PaymentProvider) {
+  return channels.value.find((item) => item.provider === provider);
+}
+
+function epayMethod(): PaymentMethod {
+  const channel = channelForProvider('epay');
+  const type = channel?.type || '';
+  if (type === 'paypal') return { provider: 'epay' as const, label: '易支付 / PayPal', image: paypalIcon, channel };
+  return { provider: 'epay' as const, label: '易支付', icon: Banknote, channel };
+}
+
+function selectPaymentMethod(channel?: PaymentChannel) {
+  if (!channel) return;
+  rechargeForm.channelId = channel.id;
+  rechargeForm.provider = channel.provider;
 }
 
 async function createRechargeOrder() {
@@ -91,11 +126,6 @@ function openPurchaseUrl() {
   window.open(publicSettings.cardPurchaseUrl, '_blank', 'noopener,noreferrer');
 }
 
-function onChannelChange() {
-  const channel = selectedChannel.value;
-  if (channel) rechargeForm.provider = channel.provider;
-}
-
 function providerLabel(provider: PaymentProvider) {
   const labels: Record<PaymentProvider, string> = {
     alipay: '支付宝',
@@ -117,13 +147,23 @@ onMounted(loadFinanceData);
   <div class="finance-grid">
     <section class="panel finance-form">
       <h2>余额充值</h2>
+      <div class="payment-method-grid">
+        <button
+          v-for="method in paymentMethods"
+          :key="method.provider"
+          type="button"
+          class="payment-method-button"
+          :class="{ active: method.channel?.id === rechargeForm.channelId }"
+          :disabled="loading || !method.channel"
+          @click="selectPaymentMethod(method.channel)"
+        >
+          <img v-if="method.image" :src="method.image" :alt="method.label" />
+          <component :is="method.icon" v-else :size="18" />
+          <span>{{ method.label }}</span>
+          <small>{{ method.channel ? '已启用' : '未启用' }}</small>
+        </button>
+      </div>
       <form @submit.prevent="createRechargeOrder">
-        <select v-model="rechargeForm.channelId" :disabled="loading || !channels.length" @change="onChannelChange">
-          <option value="" disabled>{{ loading ? '加载支付方式中' : '选择支付方式' }}</option>
-          <option v-for="channel in channels" :key="channel.id" :value="channel.id">
-            {{ channel.name }} / {{ providerLabel(channel.provider) }}
-          </option>
-        </select>
         <input v-model.number="rechargeForm.amount" type="number" min="0.01" step="0.01" placeholder="充值金额" />
         <button :disabled="recharging || !selectedChannel || rechargeForm.amount <= 0">{{ recharging ? '创建中' : '去支付' }}</button>
       </form>
