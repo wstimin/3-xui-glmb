@@ -22,6 +22,7 @@ type SyncOptions = {
   status?: AccountStatus;
   trafficLimitGb?: Prisma.Decimal | number | string | null;
   createIfMissing?: boolean;
+  requireExisting?: boolean;
 };
 
 type ServiceNodeConfig = {
@@ -749,6 +750,9 @@ export class XuiService {
       }, inbounds);
 
       if (!existing.exists && options.createIfMissing === false) {
+        if (options.requireExisting) {
+          throw new BadRequestException('Remote 3x-ui client was not found. This operation only updates an existing client and will not create a duplicate client.');
+        }
         const uuid = customerNode.uuid || savedUuid || randomUUID();
         const subId = savedSubId || this.subscriptionId(uuid);
         const syncedAt = new Date();

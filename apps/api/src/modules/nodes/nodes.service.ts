@@ -380,6 +380,15 @@ export class NodesService {
     if (!customer) throw new NotFoundException('Customer not found');
     if (!serviceNode) throw new NotFoundException('Service node not found');
 
+    const existingBinding = await this.prisma.customerNode.findFirst({
+      where: { serviceNodeId: input.serviceNodeId },
+      select: { id: true, customerId: true, customer: { select: { name: true, loginUsername: true } } }
+    });
+    if (existingBinding) {
+      const owner = existingBinding.customer?.name || existingBinding.customer?.loginUsername || existingBinding.customerId;
+      throw new BadRequestException(`该路由节点已经绑定给用户 ${owner}。当前架构下远端 3x-ui 客户端属于路由节点，不能同时绑定多个面板用户。`);
+    }
+
     const serviceConfig = jsonObject(serviceNode.config) as ServiceNodeConfig;
     const xuiEmail = input.xuiEmail || stringValue(serviceConfig.remoteClientEmail);
     const uuid = input.uuid || stringValue(serviceConfig.remoteClientUuid) || null;
@@ -400,6 +409,19 @@ export class NodesService {
       include: { serviceNode: { include: { server: true } }, customer: { select: { id: true, name: true, loginUsername: true } } }
     });
 
+    try {
+      await this.xui.syncCustomerNode(customerId, node.id, {
+        expireAt: input.expireAt || null,
+        trafficLimitGb: node.trafficLimitGb,
+        status: 'active',
+        createIfMissing: false,
+        requireExisting: true
+      });
+    } catch (error) {
+      await this.prisma.customerNode.delete({ where: { id: node.id } }).catch(() => undefined);
+      throw error;
+    }
+
     return this.prisma.customerNode.findUnique({
       where: { id: node.id },
       include: { serviceNode: { include: { server: true } }, customer: { select: { id: true, name: true, loginUsername: true } } }
@@ -415,11 +437,14 @@ export class NodesService {
     if (!serviceNode) throw new NotFoundException('Service node not found');
 
     if (serviceNodeId !== current.serviceNodeId) {
-      const duplicated = await this.prisma.customerNode.findUnique({
-        where: { customerId_serviceNodeId: { customerId, serviceNodeId } },
-        select: { id: true }
+      const duplicated = await this.prisma.customerNode.findFirst({
+        where: { serviceNodeId, id: { not: customerNodeId } },
+        select: { id: true, customerId: true, customer: { select: { name: true, loginUsername: true } } }
       });
-      if (duplicated) throw new BadRequestException('Customer already bound to this service node');
+      if (duplicated) {
+        const owner = duplicated.customer?.name || duplicated.customer?.loginUsername || duplicated.customerId;
+        throw new BadRequestException(`该路由节点已经绑定给用户 ${owner}。当前架构下远端 3x-ui 客户端属于路由节点，不能同时绑定多个面板用户。`);
+      }
     }
 
     const serviceConfig = jsonObject(serviceNode.config) as ServiceNodeConfig;
@@ -451,6 +476,30 @@ export class NodesService {
       },
       include: { serviceNode: { include: { server: true } }, customer: { select: { id: true, name: true, loginUsername: true } } }
     });
+
+    try {
+      await this.xui.syncCustomerNode(customerId, customerNodeId, {
+        expireAt: input.expireAt === undefined ? node.expireAt : input.expireAt || null,
+        trafficLimitGb: input.trafficLimitGb === undefined ? node.trafficLimitGb : new Prisma.Decimal(input.trafficLimitGb ?? serviceNode.trafficLimitGb),
+        status: 'active',
+        createIfMissing: false,
+        requireExisting: true
+      });
+    } catch (error) {
+      await this.prisma.customerNode.update({
+        where: { id: customerNodeId },
+        data: {
+          serviceNodeId: current.serviceNodeId,
+          xuiEmail: current.xuiEmail,
+          uuid: current.uuid,
+          expireAt: current.expireAt,
+          trafficLimitGb: current.trafficLimitGb,
+          status: current.status,
+          config: this.toJsonValue(current.config)
+        }
+      }).catch(() => undefined);
+      throw error;
+    }
 
     return this.prisma.customerNode.findUnique({
       where: { id: node.id },

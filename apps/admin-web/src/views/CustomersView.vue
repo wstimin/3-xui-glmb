@@ -112,7 +112,7 @@ async function bindNode() {
         trafficLimitGb: bindForm.trafficLimitGb
       }
     });
-    ElMessage.success('节点已绑定，本地已保存');
+    ElMessage.success('节点已绑定，远端客户端已同步');
     bindDialogVisible.value = false;
     Object.assign(bindForm, { xuiEmail: '', expireAt: defaultExpireAt(), trafficLimitGb: undefined });
     await loadCustomers();
@@ -137,7 +137,7 @@ async function updateCustomerNode() {
         trafficLimitGb: nodeEditForm.trafficLimitGb
       }
     });
-    ElMessage.success('绑定节点已更新，本地已保存');
+    ElMessage.success('绑定节点已更新，远端客户端已同步');
     editNodeDialogVisible.value = false;
     await loadCustomers();
   } catch (err) {
@@ -521,7 +521,7 @@ onMounted(loadCustomers);
           <el-option v-for="node in serviceNodes" :key="node.id" :label="`${node.name} / ${node.server?.name || '-'}`" :value="node.id" />
         </el-select>
       </el-form-item>
-      <el-form-item label="远端标识"><el-input v-model="bindForm.xuiEmail" placeholder="可留空，默认使用服务节点已有远端客户端" /></el-form-item>
+      <el-form-item label="远端标识"><el-input v-model="bindForm.xuiEmail" placeholder="可留空，使用路由节点已有远端客户端" /></el-form-item>
       <el-form-item label="到期时间">
         <div class="date-picker-stack">
           <el-date-picker v-model="bindForm.expireAt" type="datetime" placeholder="到期时间，可留空" value-format="YYYY-MM-DDTHH:mm:ss.SSSZ" style="width: 100%" />
@@ -548,7 +548,7 @@ onMounted(loadCustomers);
           <el-option v-for="node in serviceNodes" :key="node.id" :label="`${node.name} / ${node.server?.name || '-'}`" :value="node.id" />
         </el-select>
       </el-form-item>
-      <el-form-item label="远端标识"><el-input v-model="nodeEditForm.xuiEmail" placeholder="本地保存；同步时只更新已有 3x-ui 客户端" /></el-form-item>
+      <el-form-item label="远端标识"><el-input v-model="nodeEditForm.xuiEmail" placeholder="只更新已有 3x-ui 客户端，不会新建客户端" /></el-form-item>
       <el-form-item label="到期时间">
         <div class="date-picker-stack">
           <el-date-picker v-model="nodeEditForm.expireAt" type="datetime" placeholder="到期时间，可留空" value-format="YYYY-MM-DDTHH:mm:ss.SSSZ" style="width: 100%" />
