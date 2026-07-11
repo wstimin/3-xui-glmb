@@ -89,6 +89,18 @@ export class JobsService {
     };
   }
 
+  async jobStatus() {
+    const [disableExpiredLog, trafficSyncLog] = await Promise.all([
+      this.prisma.syncLog.findFirst({ where: { action: 'disable-expired-nodes' }, orderBy: { createdAt: 'desc' } }),
+      this.prisma.syncLog.findFirst({ where: { action: 'disable-traffic-exceeded-nodes' }, orderBy: { createdAt: 'desc' } })
+    ]);
+
+    return {
+      lastDisableExpired: this.disableExpiredStatus(disableExpiredLog),
+      lastTrafficSync: this.trafficSyncStatus(trafficSyncLog)
+    };
+  }
+
   async updateJobSettings(input: Partial<Record<keyof JobSettings, unknown>>) {
     const current = await this.jobSettings();
     const next: JobSettings = {
@@ -270,6 +282,39 @@ export class JobsService {
 
   private toJsonValue(value: unknown): Prisma.InputJsonValue {
     return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
+  }
+
+  private disableExpiredStatus(log: { detail: Prisma.JsonValue; createdAt: Date } | null) {
+    if (!log) return null;
+    const detail = this.objectValue(log.detail);
+    const results = Array.isArray(detail.results) ? detail.results.map((item) => this.objectValue(item)) : [];
+    const success = results.filter((item) => item.disabled === true).length;
+    const failed = results.length - success;
+    return {
+      checkedAt: this.dateValue(detail.checkedAt) || log.createdAt,
+      total: results.length,
+      success,
+      failed
+    };
+  }
+
+  private trafficSyncStatus(log: { detail: Prisma.JsonValue; createdAt: Date } | null) {
+    if (!log) return null;
+    const detail = this.objectValue(log.detail);
+    const results = Array.isArray(detail.results) ? detail.results.map((item) => this.objectValue(item)) : [];
+    const disabled = results.filter((item) => item.disabled === true).length;
+    const failed = results.length - disabled;
+    return {
+      checkedAt: this.dateValue(detail.checkedAt) || log.createdAt,
+      checked: this.numberValue(detail.checked) || 0,
+      disabled,
+      failed
+    };
+  }
+
+  private dateValue(value: unknown) {
+    const date = value instanceof Date ? value : typeof value === 'string' || typeof value === 'number' ? new Date(value) : null;
+    return date && Number.isFinite(date.getTime()) ? date : null;
   }
 
   private errorMessage(error: unknown) {

@@ -1,7 +1,7 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Activity, Edit3, Plus, RefreshCw, Trash2, Users, Wifi } from 'lucide-vue-next';
+import { Activity, Edit3, Plus, RefreshCw, Search, Trash2, Users, Wifi } from 'lucide-vue-next';
 import { api } from '../api';
 
 type XuiServer = {
@@ -36,6 +36,7 @@ const syncingIds = ref<Set<string>>(new Set());
 const statusIds = ref<Set<string>>(new Set());
 const presenceIds = ref<Set<string>>(new Set());
 const error = ref('');
+const searchQuery = ref('');
 const editingId = ref('');
 const dialogVisible = ref(false);
 const form = reactive({ name: '', baseUrl: '', basePath: '', username: '', password: '', token: '', tlsServerName: '', tlsCertFile: '', tlsKeyFile: '', realityTarget: '', realityServerName: '', realityFingerprint: 'chrome', realitySpiderX: '/', enabled: true, remark: '' });
@@ -44,6 +45,11 @@ const enabledServerCount = computed(() => servers.value.filter((server) => serve
 const tokenServerCount = computed(() => servers.value.filter((server) => server.hasToken).length);
 const tlsServerCount = computed(() => servers.value.filter((server) => hasTlsConfig(server)).length);
 const realityAutoCount = computed(() => servers.value.filter((server) => !server.config?.realityTarget || !server.config?.realityServerName).length);
+const filteredServers = computed(() => {
+  const keyword = searchQuery.value.trim().toLowerCase();
+  if (!keyword) return servers.value;
+  return servers.value.filter((server) => serverSearchText(server).includes(keyword));
+});
 
 async function loadServers() {
   loading.value = true;
@@ -246,6 +252,23 @@ function formatUnixTime(value: unknown) {
   return new Date(time * 1000).toLocaleString('zh-CN', { hour12: false });
 }
 
+function serverSearchText(server: XuiServer) {
+  return [
+    server.name,
+    server.baseUrl,
+    server.basePath,
+    server.username,
+    server.enabled ? '启用' : '停用',
+    server.hasToken ? 'token' : '',
+    server.hasPassword ? '账号密码' : '',
+    server.config?.tlsServerName,
+    server.config?.tlsCertFile,
+    server.config?.realityTarget,
+    server.config?.realityServerName,
+    server.remark
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
 onMounted(loadServers);
 </script>
 
@@ -275,7 +298,13 @@ onMounted(loadServers);
         <el-button type="primary" @click="openDialog"><Plus :size="15" />添加面板连接</el-button>
       </div>
     </div>
-    <el-table :data="servers" v-loading="loading" style="width: 100%">
+    <div class="filter-bar">
+      <el-input v-model="searchQuery" clearable placeholder="搜索名称、地址、账号、证书、Reality" style="max-width: 380px">
+        <template #prefix><Search :size="15" /></template>
+      </el-input>
+      <span class="filter-summary">显示 {{ filteredServers.length }} / {{ servers.length }}</span>
+    </div>
+    <el-table :data="filteredServers" v-loading="loading" style="width: 100%">
       <el-table-column prop="name" label="名称" min-width="140" />
       <el-table-column prop="baseUrl" label="面板地址" min-width="220" />
       <el-table-column prop="basePath" label="路径" width="120" />

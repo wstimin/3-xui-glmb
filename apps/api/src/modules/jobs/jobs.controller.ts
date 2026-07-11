@@ -14,6 +14,11 @@ export class JobsController {
     return this.jobs.jobSettings();
   }
 
+  @Get('status')
+  status() {
+    return this.jobs.jobStatus();
+  }
+
   @Patch('settings')
   updateSettings(@Body() body: { disableExpiredEnabled?: unknown; trafficSyncEnabled?: unknown }) {
     return this.jobs.updateJobSettings(body);

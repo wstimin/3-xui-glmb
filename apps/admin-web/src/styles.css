@@ -38,6 +38,7 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .table-toolbar-actions .el-button { margin-left: 0; }
 .filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px; margin-bottom: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f8fafc; }
 .filter-bar .el-button { margin-left: 0; }
+.filter-summary { color: #64748b; font-size: 13px; }
 .status-segment { display: inline-flex; align-items: center; gap: 3px; padding: 3px; border: 1px solid #d7dde8; border-radius: 8px; background: #f8fafc; }
 .status-segment button { height: 30px; min-width: 52px; border: 0; border-radius: 6px; background: transparent; color: #64748b; cursor: pointer; font: inherit; font-size: 13px; }
 .status-segment button:hover { background: #eef2f7; color: #1f2937; }
@@ -111,6 +112,8 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .job-card-head strong, .job-card-head span { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .job-card-head strong { color: #111827; }
 .job-card-head span { margin-top: 3px; color: #64748b; font-size: 13px; }
+.job-toggle { display: inline-flex; align-items: center; gap: 8px; padding: 4px 6px 4px 10px; border: 1px solid #d7dde8; border-radius: 999px; background: #f8fafc; }
+.job-toggle span { margin: 0; color: #475569; font-size: 12px; font-weight: 700; }
 .job-icon { width: 42px; height: 42px; display: grid; place-items: center; border: 1px solid #d7dde8; border-radius: 8px; background: #f8fafc; color: #2563eb; }
 .job-card-body { display: grid; grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 0.7fr)); gap: 10px; }
 .job-card-body > div { min-height: 64px; display: grid; align-content: center; gap: 4px; padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fbfdff; }
@@ -135,10 +138,11 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .file-button input { display: none; }
 .generated-template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .generated-template-card { display: grid; gap: 12px; min-width: 0; border: 1px solid #d7dde8; border-radius: 8px; padding: 14px; background: #fbfdff; }
-.generated-template-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 32px; }
+.generated-template-head { display: grid; grid-template-columns: 1fr; gap: 10px; min-height: 32px; }
 .generated-template-head > div:first-child { min-width: 0; display: grid; gap: 3px; }
 .generated-template-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .generated-template-head span { color: #64748b; font-size: 12px; }
+.generated-template-head .table-toolbar-actions { justify-content: flex-start; }
 .card-count-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .card-count-strip > div { min-height: 54px; display: grid; align-content: center; gap: 2px; padding: 10px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; }
 .card-count-strip span { color: #64748b; font-size: 12px; }
@@ -147,10 +151,11 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .batch-code-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .batch-empty-detail { padding: 12px; color: #64748b; font-size: 13px; background: #f8fafc; border: 1px dashed #d7dde8; border-radius: 6px; }
 .generated-batch-card { display: grid; gap: 10px; min-width: 0; border: 1px solid #e5e7eb; border-radius: 8px; padding: 12px; background: #fff; }
-.generated-batch-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.generated-batch-head { display: grid; grid-template-columns: 1fr; gap: 10px; }
 .generated-batch-head > div { min-width: 0; display: grid; gap: 3px; }
 .generated-batch-head strong, .generated-batch-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .generated-batch-head span { color: #64748b; font-size: 12px; }
+.generated-batch-head .table-toolbar-actions { justify-content: flex-start; display: grid; grid-template-columns: repeat(2, max-content); align-items: center; }
 .generated-batch-head .el-button, .generated-code-row .el-button { display: inline-flex; align-items: center; gap: 5px; }
 .generated-code-list { max-height: 240px; overflow: auto; display: grid; gap: 6px; padding-right: 2px; }
 .generated-code-row { min-height: 34px; display: grid; grid-template-columns: minmax(0, 1fr) auto 68px; align-items: center; gap: 8px; border: 1px solid #eef2f7; border-radius: 6px; padding: 4px 6px 4px 10px; background: #f8fafc; }

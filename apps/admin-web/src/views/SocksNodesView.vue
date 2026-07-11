@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Edit3, Plus, RefreshCw, Trash2 } from 'lucide-vue-next';
+import { Edit3, Plus, RefreshCw, Search, Trash2 } from 'lucide-vue-next';
 import { api } from '../api';
 
 type SocksNode = {
@@ -21,6 +21,7 @@ const serviceNodes = ref<ServiceNode[]>([]);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
+const searchQuery = ref('');
 const editingId = ref('');
 const dialogVisible = ref(false);
 const form = reactive({ name: '', host: '', port: 1080, username: '', password: '', enabled: true, remark: '' });
@@ -28,6 +29,11 @@ const form = reactive({ name: '', host: '', port: 1080, username: '', password: 
 const enabledNodeCount = computed(() => nodes.value.filter((node) => node.enabled).length);
 const authedNodeCount = computed(() => nodes.value.filter((node) => node.username || node.hasPassword).length);
 const usedNodeCount = computed(() => nodes.value.filter((node) => usageCount(node.id) > 0).length);
+const filteredNodes = computed(() => {
+  const keyword = searchQuery.value.trim().toLowerCase();
+  if (!keyword) return nodes.value;
+  return nodes.value.filter((node) => socksSearchText(node).includes(keyword));
+});
 
 async function loadNodes() {
   loading.value = true;
@@ -107,6 +113,10 @@ function usageCount(id: string) {
   return serviceNodes.value.filter((node) => node.config?.socksRelayEnabled && node.config?.socksNodeId === id).length;
 }
 
+function socksSearchText(node: SocksNode) {
+  return [node.name, node.host, node.port, node.username, node.enabled ? '启用' : '停用', node.remark, usageCount(node.id)].filter(Boolean).join(' ').toLowerCase();
+}
+
 onMounted(loadNodes);
 </script>
 
@@ -136,7 +146,13 @@ onMounted(loadNodes);
         <el-button type="primary" @click="openDialog"><Plus :size="15" />添加出站节点</el-button>
       </div>
     </div>
-    <el-table :data="nodes" v-loading="loading" style="width: 100%">
+    <div class="filter-bar">
+      <el-input v-model="searchQuery" clearable placeholder="搜索名称、地址、端口、账号、备注" style="max-width: 360px">
+        <template #prefix><Search :size="15" /></template>
+      </el-input>
+      <span class="filter-summary">显示 {{ filteredNodes.length }} / {{ nodes.length }}</span>
+    </div>
+    <el-table :data="filteredNodes" v-loading="loading" style="width: 100%">
       <el-table-column prop="name" label="名称" min-width="140" />
       <el-table-column prop="host" label="地址" min-width="180" />
       <el-table-column prop="port" label="端口" width="90" />

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Activity, Edit3, Link2, Plus, RefreshCw, RotateCcw, ServerOff, Trash2, Unlink, Wallet } from 'lucide-vue-next';
+import { Activity, Edit3, Link2, Plus, RefreshCw, RotateCcw, Search, ServerOff, Trash2, Unlink, Wallet } from 'lucide-vue-next';
 import { api } from '../api';
 
 type CustomerNode = {
@@ -83,6 +83,7 @@ const renewingIds = ref<Set<string>>(new Set());
 const trafficIds = ref<Set<string>>(new Set());
 const resettingTrafficIds = ref<Set<string>>(new Set());
 const deletingServiceNodeIds = ref<Set<string>>(new Set());
+const searchQuery = ref('');
 const editingCustomerId = ref('');
 const customerDialogVisible = ref(false);
 const bindDialogVisible = ref(false);
@@ -100,6 +101,11 @@ const activeCustomerCount = computed(() => customers.value.filter((item) => item
 const boundNodeCount = computed(() => customers.value.reduce((total, item) => total + (item.nodes?.length || 0), 0));
 const activeBoundNodeCount = computed(() => customers.value.reduce((total, item) => total + (item.nodes?.filter((node) => node.status === 'active').length || 0), 0));
 const expiredBoundNodeCount = computed(() => customers.value.reduce((total, item) => total + (item.nodes?.filter((node) => isExpiredNode(node)).length || 0), 0));
+const filteredCustomers = computed(() => {
+  const keyword = searchQuery.value.trim().toLowerCase();
+  if (!keyword) return customers.value;
+  return customers.value.filter((customer) => customerSearchText(customer).includes(keyword));
+});
 
 async function loadCustomers() {
   loading.value = true;
@@ -490,6 +496,18 @@ function formatRemoteLastOnline(value: unknown) {
   return new Date(time * 1000).toLocaleString('zh-CN', { hour12: false });
 }
 
+function customerSearchText(customer: Customer) {
+  return [
+    customer.name,
+    customer.loginUsername,
+    customer.email,
+    customer.phone,
+    customer.status,
+    customer.remark,
+    ...(customer.nodes || []).flatMap((node) => [node.xuiEmail, node.status, node.serviceNode?.name, node.serviceNode?.server?.name])
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
 onMounted(loadCustomers);
 </script>
 
@@ -521,12 +539,18 @@ onMounted(loadCustomers);
         <el-button @click="openBalanceDialog()"><Wallet :size="15" />调整余额</el-button>
       </div>
     </div>
+    <div class="filter-bar">
+      <el-input v-model="searchQuery" clearable placeholder="搜索用户、账号、联系方式、绑定节点" style="max-width: 360px">
+        <template #prefix><Search :size="15" /></template>
+      </el-input>
+      <span class="filter-summary">显示 {{ filteredCustomers.length }} / {{ customers.length }}</span>
+    </div>
     <el-collapse v-model="activePanels" class="admin-collapse">
       <el-collapse-item name="customers">
         <template #title>
-          <div class="collapse-title"><strong>用户列表</strong><span>{{ customers.length }} 个用户</span></div>
+          <div class="collapse-title"><strong>用户列表</strong><span>{{ filteredCustomers.length }} 个用户</span></div>
         </template>
-        <el-table :data="customers" v-loading="loading" style="width: 100%" row-key="id">
+        <el-table :data="filteredCustomers" v-loading="loading" style="width: 100%" row-key="id">
           <el-table-column type="expand" width="44">
             <template #default="{ row }: { row: Customer }">
               <div class="expanded-node-panel">

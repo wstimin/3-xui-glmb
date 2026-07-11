@@ -12,6 +12,7 @@ type PaymentChannel = { id: string; enabled: boolean };
 type JobSettings = { disableExpiredEnabled: boolean; trafficSyncEnabled: boolean };
 type DisableExpiredResult = { checkedAt: string; total: number; success: number; failed: number };
 type TrafficSyncResult = { checkedAt: string; checked: number; disabled: number; failed: number };
+type JobStatus = { lastDisableExpired: DisableExpiredResult | null; lastTrafficSync: TrafficSyncResult | null };
 
 const loading = ref(false);
 const jobRunning = ref(false);
@@ -37,13 +38,14 @@ async function loadDashboard() {
   loading.value = true;
   error.value = '';
   try {
-    const [customerResult, nodeResult, serverResult, cardResult, channelResult, settingsResult] = await Promise.all([
+    const [customerResult, nodeResult, serverResult, cardResult, channelResult, settingsResult, statusResult] = await Promise.all([
       api<CustomerResult>('/api/admin/customers'),
       api<ServiceNode[]>('/api/admin/service-nodes'),
       api<XuiServer[]>('/api/admin/xui-servers'),
       api<CardResult>('/api/admin/cards'),
       api<PaymentChannel[]>('/api/admin/payment-channels'),
-      api<JobSettings>('/api/admin/jobs/settings')
+      api<JobSettings>('/api/admin/jobs/settings'),
+      api<JobStatus>('/api/admin/jobs/status')
     ]);
     customers.value = customerResult;
     serviceNodes.value = nodeResult;
@@ -51,6 +53,8 @@ async function loadDashboard() {
     cards.value = cardResult;
     paymentChannels.value = channelResult;
     jobSettings.value = settingsResult;
+    lastDisableExpired.value = statusResult.lastDisableExpired;
+    lastTrafficSync.value = statusResult.lastTrafficSync;
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载数据概览失败';
   } finally {
@@ -159,13 +163,14 @@ onMounted(loadDashboard);
           <strong>自动停用过期节点</strong>
           <span>每 10 分钟检查一次，到期后同步停用远端。</span>
         </div>
-        <el-switch
-          :model-value="jobSettings.disableExpiredEnabled"
-          :loading="jobSettingsSaving"
-          active-text="启用"
-          inactive-text="停用"
-          @change="(value: string | number | boolean) => saveJobSettings({ disableExpiredEnabled: Boolean(value) })"
-        />
+        <div class="job-toggle">
+          <span>{{ jobSettings.disableExpiredEnabled ? '已启用' : '已停用' }}</span>
+          <el-switch
+            :model-value="jobSettings.disableExpiredEnabled"
+            :loading="jobSettingsSaving"
+            @change="(value: string | number | boolean) => saveJobSettings({ disableExpiredEnabled: Boolean(value) })"
+          />
+        </div>
       </div>
       <div class="job-card-body">
         <div><span>最近执行</span><strong>{{ formatDate(lastDisableExpired?.checkedAt) }}</strong></div>
@@ -184,13 +189,14 @@ onMounted(loadDashboard);
           <strong>远端流量同步任务</strong>
           <span>读取远端用量，超限后停用本地绑定和远端客户端。</span>
         </div>
-        <el-switch
-          :model-value="jobSettings.trafficSyncEnabled"
-          :loading="jobSettingsSaving"
-          active-text="启用"
-          inactive-text="停用"
-          @change="(value: string | number | boolean) => saveJobSettings({ trafficSyncEnabled: Boolean(value) })"
-        />
+        <div class="job-toggle">
+          <span>{{ jobSettings.trafficSyncEnabled ? '已启用' : '已停用' }}</span>
+          <el-switch
+            :model-value="jobSettings.trafficSyncEnabled"
+            :loading="jobSettingsSaving"
+            @change="(value: string | number | boolean) => saveJobSettings({ trafficSyncEnabled: Boolean(value) })"
+          />
+        </div>
       </div>
       <div class="job-card-body">
         <div><span>最近执行</span><strong>{{ formatDate(lastTrafficSync?.checkedAt) }}</strong></div>

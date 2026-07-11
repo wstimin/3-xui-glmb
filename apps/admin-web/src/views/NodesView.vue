@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Edit3, Gauge, Plus, RefreshCw, RotateCcw, Trash2, UploadCloud } from 'lucide-vue-next';
+import { Edit3, Gauge, Plus, RefreshCw, RotateCcw, Search, Trash2, UploadCloud } from 'lucide-vue-next';
 import { api } from '../api';
 
 type XuiServer = { id: string; name: string; baseUrl: string; enabled: boolean };
@@ -87,6 +87,7 @@ const syncingConfigIds = ref<Set<string>>(new Set());
 const syncingTrafficLimitIds = ref<Set<string>>(new Set());
 const resettingTrafficIds = ref<Set<string>>(new Set());
 const error = ref('');
+const searchQuery = ref('');
 const editingId = ref('');
 const dialogVisible = ref(false);
 const form = reactive({
@@ -110,6 +111,11 @@ const enabledNodeCount = computed(() => nodes.value.filter((item) => item.enable
 const remoteManagedNodeCount = computed(() => nodes.value.filter((item) => item.config?.remoteManaged).length);
 const socksRelayNodeCount = computed(() => nodes.value.filter((item) => item.config?.socksRelayEnabled).length);
 const inboundReadyNodeCount = computed(() => nodes.value.filter((item) => item.inboundId).length);
+const filteredNodes = computed(() => {
+  const keyword = searchQuery.value.trim().toLowerCase();
+  if (!keyword) return nodes.value;
+  return nodes.value.filter((node) => nodeSearchText(node).includes(keyword));
+});
 
 async function loadNodes() {
   loading.value = true;
@@ -311,6 +317,21 @@ function remoteModeLabel(node: ServiceNode) {
   return node.config?.remoteManaged ? '自动创建' : '绑定已有';
 }
 
+function nodeSearchText(node: ServiceNode) {
+  return [
+    node.name,
+    node.server?.name,
+    node.protocol,
+    node.config?.encryption,
+    node.config?.remoteManaged ? '自动创建' : '绑定已有',
+    node.inboundId,
+    node.priceMonthly,
+    node.trafficLimitGb,
+    node.remark,
+    socksLabel(node.config?.socksNodeId)
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+
 onMounted(loadNodes);
 </script>
 
@@ -340,7 +361,13 @@ onMounted(loadNodes);
         <el-button type="primary" @click="openDialog"><Plus :size="15" />添加路由节点</el-button>
       </div>
     </div>
-    <el-table :data="nodes" v-loading="loading" style="width: 100%">
+    <div class="filter-bar">
+      <el-input v-model="searchQuery" clearable placeholder="搜索节点、面板连接、入站 ID、协议、安全类型" style="max-width: 380px">
+        <template #prefix><Search :size="15" /></template>
+      </el-input>
+      <span class="filter-summary">显示 {{ filteredNodes.length }} / {{ nodes.length }}</span>
+    </div>
+    <el-table :data="filteredNodes" v-loading="loading" style="width: 100%">
       <el-table-column prop="name" label="名称" min-width="140" />
       <el-table-column label="面板连接" min-width="140">
         <template #default="{ row }: { row: ServiceNode }">{{ row.server?.name || '-' }}</template>
