@@ -30,7 +30,7 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .page-head-main { min-width: 0; display: grid; gap: 4px; }
 .page-head-main p { margin: 0; color: #64748b; font-size: 13px; line-height: 1.5; }
 .page-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.page-actions .el-button, .filter-bar .el-button, .job-card-actions .el-button, .el-dialog__footer .el-button { display: inline-flex; align-items: center; gap: 6px; }
+.page-actions .el-button, .filter-bar .el-button, .job-card-actions .el-button, .el-dialog__footer .el-button, .table-toolbar-actions .el-button, .row-actions .el-button, .node-actions .el-button { display: inline-flex; align-items: center; gap: 6px; }
 .page-title { margin: 0; font-size: 22px; }
 .panel { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; padding: 18px; }
 .panel-toolbar { min-height: 38px; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
@@ -65,6 +65,17 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .node-row { min-height: 52px; display: grid; grid-template-columns: minmax(0, 1fr) 32px; align-items: center; gap: 10px; }
 .customer-node-row { grid-template-columns: minmax(0, 1fr) auto; }
 .node-actions { display: flex; align-items: center; gap: 6px; }
+.node-action-grid { justify-content: flex-end; flex-wrap: wrap; max-width: 560px; }
+.node-action-group { display: inline-flex; align-items: center; gap: 6px; padding: 3px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f8fafc; }
+.node-action-group .el-button { margin-left: 0; }
+.renew-action { background: #fff; }
+.manage-action { background: #fbfdff; }
+.danger-action { border-color: #fee2e2; background: #fff7f7; }
+.row-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.row-actions .el-button { margin-left: 0; }
+.row-actions-split { gap: 8px; }
+.row-action-group { display: inline-flex; align-items: center; gap: 5px; flex-wrap: wrap; padding: 3px; border: 1px solid #e5e7eb; border-radius: 8px; background: #f8fafc; }
+.row-action-group .el-button { margin-left: 0; }
 .node-meta { min-width: 0; display: grid; gap: 2px; }
 .node-title-line { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .node-meta strong, .node-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -151,4 +162,4 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 @media (max-width: 1200px) { .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .job-card-grid { grid-template-columns: 1fr; } }
 @media (max-width: 1100px) { .inline-form, .payment-form, .customer-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .bind-row-wide, .balance-row, .provider-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 900px) { .node-grid, .settings-grid { grid-template-columns: 1fr; } .expanded-node-panel { padding-left: 12px; } }
-@media (max-width: 720px) { .page-head, .panel-toolbar { display: grid; justify-content: stretch; } .page-actions, .filter-bar { justify-content: flex-start; } .status-strip, .job-card-body, .inline-form, .bind-row, .bind-row-wide, .balance-row, .payment-form, .customer-form-grid, .dialog-form-grid, .payment-dialog-form, .generated-template-grid, .batch-code-stack { grid-template-columns: 1fr; } .job-card-head { grid-template-columns: 42px minmax(0, 1fr); } .job-card-head .el-switch { grid-column: 1 / -1; justify-self: start; } .customer-node-row { grid-template-columns: 1fr; } .node-actions { flex-wrap: wrap; } .generated-batch-head { display: grid; } }
+@media (max-width: 720px) { .page-head, .panel-toolbar { display: grid; justify-content: stretch; } .page-actions, .filter-bar { justify-content: flex-start; } .status-strip, .job-card-body, .inline-form, .bind-row, .bind-row-wide, .balance-row, .payment-form, .customer-form-grid, .dialog-form-grid, .payment-dialog-form, .generated-template-grid, .batch-code-stack { grid-template-columns: 1fr; } .job-card-head { grid-template-columns: 42px minmax(0, 1fr); } .job-card-head .el-switch { grid-column: 1 / -1; justify-self: start; } .customer-node-row { grid-template-columns: 1fr; } .node-actions, .node-action-group, .row-actions, .row-action-group { flex-wrap: wrap; justify-content: flex-start; } .generated-batch-head { display: grid; } }

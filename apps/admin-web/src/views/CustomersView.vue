@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Activity, RefreshCw, RotateCcw } from 'lucide-vue-next';
+import { Activity, Edit3, Link2, Plus, RefreshCw, RotateCcw, ServerOff, Trash2, Unlink, Wallet } from 'lucide-vue-next';
 import { api } from '../api';
 
 type CustomerNode = {
@@ -152,7 +152,7 @@ async function bindNode() {
         trafficLimitGb: bindForm.trafficLimitGb
       }
     });
-    ElMessage.success('节点已绑定，远端客户端已同步');
+    ElMessage.success('节点已绑定，远端已有客户端已更新');
     await showCustomerSyncResult(result.sync, '绑定同步结果');
     bindDialogVisible.value = false;
     Object.assign(bindForm, { xuiEmail: '', expireAt: defaultExpireAt(), trafficLimitGb: undefined });
@@ -178,7 +178,7 @@ async function updateCustomerNode() {
         trafficLimitGb: nodeEditForm.trafficLimitGb
       }
     });
-    ElMessage.success('绑定节点已更新，远端客户端已同步');
+    ElMessage.success('绑定节点已更新，远端已有客户端已同步');
     await showCustomerSyncResult(result.sync, '绑定更新结果');
     editNodeDialogVisible.value = false;
     await loadCustomers();
@@ -480,7 +480,15 @@ onMounted(loadCustomers);
 </script>
 
 <template>
-  <h1 class="page-title">用户管理</h1>
+  <div class="page-head">
+    <div class="page-head-main">
+      <h1 class="page-title">用户管理</h1>
+      <p>管理面板登录用户、余额和本地节点绑定；绑定只更新路由节点已有的 3x-ui 客户端。</p>
+    </div>
+    <div class="page-actions">
+      <el-button :loading="loading" @click="loadCustomers"><RefreshCw :size="15" />刷新</el-button>
+    </div>
+  </div>
   <el-alert v-if="error" class="page-alert" :title="error" type="error" show-icon :closable="false" />
 
   <div class="metric-grid compact-metrics">
@@ -494,10 +502,9 @@ onMounted(loadCustomers);
     <div class="panel-toolbar">
       <strong>用户业务</strong>
       <div class="table-toolbar-actions">
-        <el-button type="primary" @click="openCustomerDialog">新增用户</el-button>
-        <el-button @click="openBindDialog()">绑定节点</el-button>
-        <el-button @click="openBalanceDialog()">调整余额</el-button>
-        <el-button :loading="loading" @click="loadCustomers">刷新</el-button>
+        <el-button type="primary" @click="openCustomerDialog"><Plus :size="15" />新增用户</el-button>
+        <el-button @click="openBindDialog()"><Link2 :size="15" />绑定节点</el-button>
+        <el-button @click="openBalanceDialog()"><Wallet :size="15" />调整余额</el-button>
       </div>
     </div>
     <el-collapse v-model="activePanels" class="admin-collapse">
@@ -511,7 +518,7 @@ onMounted(loadCustomers);
               <div class="expanded-node-panel">
                 <div class="expanded-node-head">
                   <strong>绑定节点</strong>
-                  <el-button size="small" type="primary" plain @click="openBindDialog(row)">绑定节点</el-button>
+                  <el-button size="small" type="primary" plain @click="openBindDialog(row)"><Link2 :size="15" />绑定节点</el-button>
                 </div>
                 <div v-if="row.nodes?.length" class="node-list expanded-node-list">
                   <div v-for="node in row.nodes" :key="node.id" class="node-row customer-node-row">
@@ -523,26 +530,34 @@ onMounted(loadCustomers);
                       <span>{{ node.serviceNode?.server?.name || '-' }} / {{ node.xuiEmail }}</span>
                       <span>到期 {{ formatDate(node.expireAt) }} · 流量 {{ node.trafficLimitGb ?? '-' }} GB · 同步 {{ formatDate(node.lastSyncedAt) }}</span>
                     </div>
-                    <div class="node-actions">
-                      <el-select v-model="renewMonths[node.id]" size="small" style="width: 82px">
-                        <el-option :value="1" label="1月" />
-                        <el-option :value="3" label="3月" />
-                        <el-option :value="6" label="6月" />
-                        <el-option :value="12" label="12月" />
-                      </el-select>
-                      <el-button size="small" :loading="renewingIds.has(node.id)" @click="renewNode(row, node)">续费</el-button>
-                      <el-tooltip content="同步到 3x-ui" placement="top">
-                        <el-button circle size="small" :loading="syncingIds.has(node.id)" @click="syncNode(row, node)"><RefreshCw :size="15" /></el-button>
-                      </el-tooltip>
-                      <el-tooltip content="查看远端流量" placement="top">
-                        <el-button circle size="small" :loading="trafficIds.has(node.id)" @click="showNodeTraffic(row, node)"><Activity :size="15" /></el-button>
-                      </el-tooltip>
-                      <el-tooltip content="重置远端流量" placement="top">
-                        <el-button circle size="small" :loading="resettingTrafficIds.has(node.id)" @click="resetNodeTraffic(row, node)"><RotateCcw :size="15" /></el-button>
-                      </el-tooltip>
-                      <el-button size="small" @click="editCustomerNode(row, node)">编辑</el-button>
-                      <el-button size="small" @click="unbindNode(row, node)">解绑</el-button>
-                      <el-button size="small" type="danger" :loading="deletingServiceNodeIds.has(node.id)" @click="deleteBoundServiceNode(row, node)">删除节点</el-button>
+                    <div class="node-actions node-action-grid">
+                      <div class="node-action-group renew-action">
+                        <el-select v-model="renewMonths[node.id]" size="small" style="width: 82px">
+                          <el-option :value="1" label="1月" />
+                          <el-option :value="3" label="3月" />
+                          <el-option :value="6" label="6月" />
+                          <el-option :value="12" label="12月" />
+                        </el-select>
+                        <el-button size="small" :loading="renewingIds.has(node.id)" @click="renewNode(row, node)">续费</el-button>
+                      </div>
+                      <div class="node-action-group">
+                        <el-tooltip content="同步已有远端客户端" placement="top">
+                          <el-button circle size="small" :loading="syncingIds.has(node.id)" @click="syncNode(row, node)"><RefreshCw :size="15" /></el-button>
+                        </el-tooltip>
+                        <el-tooltip content="查看远端流量" placement="top">
+                          <el-button circle size="small" :loading="trafficIds.has(node.id)" @click="showNodeTraffic(row, node)"><Activity :size="15" /></el-button>
+                        </el-tooltip>
+                        <el-tooltip content="重置远端流量" placement="top">
+                          <el-button circle size="small" :loading="resettingTrafficIds.has(node.id)" @click="resetNodeTraffic(row, node)"><RotateCcw :size="15" /></el-button>
+                        </el-tooltip>
+                      </div>
+                      <div class="node-action-group manage-action">
+                        <el-button size="small" @click="editCustomerNode(row, node)"><Edit3 :size="15" />编辑</el-button>
+                        <el-button size="small" @click="unbindNode(row, node)"><Unlink :size="15" />解绑</el-button>
+                      </div>
+                      <div class="node-action-group danger-action">
+                        <el-button size="small" type="danger" plain :loading="deletingServiceNodeIds.has(node.id)" @click="deleteBoundServiceNode(row, node)"><ServerOff :size="15" />删除节点</el-button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -560,10 +575,12 @@ onMounted(loadCustomers);
           <el-table-column label="创建时间" min-width="170"><template #default="{ row }: { row: Customer }">{{ formatDate(row.createdAt) }}</template></el-table-column>
           <el-table-column label="操作" width="250" fixed="right">
             <template #default="{ row }: { row: Customer }">
-              <el-button size="small" @click="openBindDialog(row)">绑定</el-button>
-              <el-button size="small" @click="openBalanceDialog(row)">余额</el-button>
-              <el-button size="small" @click="editCustomer(row)">编辑</el-button>
-              <el-button size="small" type="danger" @click="removeCustomer(row)">删除</el-button>
+              <div class="row-actions">
+                <el-button size="small" @click="openBindDialog(row)"><Link2 :size="15" />绑定</el-button>
+                <el-button size="small" @click="openBalanceDialog(row)"><Wallet :size="15" />余额</el-button>
+                <el-button size="small" @click="editCustomer(row)"><Edit3 :size="15" />编辑</el-button>
+                <el-button size="small" type="danger" plain @click="removeCustomer(row)"><Trash2 :size="15" />删除</el-button>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -588,7 +605,7 @@ onMounted(loadCustomers);
     </template>
   </el-dialog>
 
-  <el-dialog v-model="bindDialogVisible" title="绑定服务节点" width="760px" destroy-on-close>
+  <el-dialog v-model="bindDialogVisible" title="绑定路由节点" width="760px" destroy-on-close>
     <el-form :model="bindForm" label-width="104px" class="dialog-form-grid">
       <el-form-item label="用户">
         <el-select v-model="bindForm.customerId" placeholder="选择用户" style="width: 100%">
@@ -600,7 +617,7 @@ onMounted(loadCustomers);
           <el-option v-for="node in serviceNodes" :key="node.id" :label="`${node.name} / ${node.server?.name || '-'}`" :value="node.id" />
         </el-select>
       </el-form-item>
-      <el-form-item label="远端标识"><el-input v-model="bindForm.xuiEmail" placeholder="可留空，使用路由节点已有远端客户端" /></el-form-item>
+      <el-form-item label="远端标识"><el-input v-model="bindForm.xuiEmail" placeholder="可留空，默认使用路由节点已有远端客户端，不会新建客户端" /></el-form-item>
       <el-form-item label="到期时间">
         <div class="date-picker-stack">
           <el-date-picker v-model="bindForm.expireAt" type="datetime" placeholder="到期时间，可留空" value-format="YYYY-MM-DDTHH:mm:ss.SSSZ" style="width: 100%" />

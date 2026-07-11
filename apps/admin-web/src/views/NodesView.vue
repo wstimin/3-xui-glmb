@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Gauge, RotateCcw, UploadCloud } from 'lucide-vue-next';
+import { Edit3, Gauge, Plus, RefreshCw, RotateCcw, Trash2, UploadCloud } from 'lucide-vue-next';
 import { api } from '../api';
 
 type XuiServer = { id: string; name: string; baseUrl: string; enabled: boolean };
@@ -311,15 +311,22 @@ onMounted(loadNodes);
 </script>
 
 <template>
-  <h1 class="page-title">路由节点</h1>
+  <div class="page-head">
+    <div class="page-head-main">
+      <h1 class="page-title">路由节点</h1>
+      <p>管理本地可售节点、远端入站、传输安全和出站中转配置。</p>
+    </div>
+    <div class="page-actions">
+      <el-button :loading="loading" @click="loadNodes"><RefreshCw :size="15" />刷新</el-button>
+    </div>
+  </div>
   <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="page-alert" />
 
   <div class="panel list-panel">
     <div class="panel-toolbar">
       <strong>路由节点列表</strong>
       <div class="table-toolbar-actions">
-        <el-button type="primary" @click="openDialog">添加路由节点</el-button>
-        <el-button :loading="loading" @click="loadNodes">刷新</el-button>
+        <el-button type="primary" @click="openDialog"><Plus :size="15" />添加路由节点</el-button>
       </div>
     </div>
     <el-table :data="nodes" v-loading="loading" style="width: 100%">
@@ -346,13 +353,19 @@ onMounted(loadNodes);
       <el-table-column label="状态" width="90">
         <template #default="{ row }: { row: ServiceNode }"><el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag></template>
       </el-table-column>
-      <el-table-column label="操作" width="520" fixed="right">
+      <el-table-column label="操作" width="440" fixed="right">
         <template #default="{ row }: { row: ServiceNode }">
-          <el-button size="small" :loading="syncingConfigIds.has(row.id)" :disabled="!row.inboundId" @click="syncRemoteConfig(row)"><UploadCloud :size="15" />同步出站</el-button>
-          <el-button size="small" :loading="syncingTrafficLimitIds.has(row.id)" :disabled="!row.inboundId" @click="syncTrafficLimit(row)"><Gauge :size="15" />同步流量</el-button>
-          <el-button size="small" :loading="resettingTrafficIds.has(row.id)" :disabled="!row.inboundId" @click="resetRemoteTraffic(row)"><RotateCcw :size="15" />重置流量</el-button>
-          <el-button size="small" @click="editNode(row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="removeNode(row)">删除</el-button>
+          <div class="row-actions row-actions-split">
+            <div class="row-action-group">
+              <el-button size="small" :loading="syncingConfigIds.has(row.id)" :disabled="!row.inboundId" @click="syncRemoteConfig(row)"><UploadCloud :size="15" />出站</el-button>
+              <el-button size="small" :loading="syncingTrafficLimitIds.has(row.id)" :disabled="!row.inboundId" @click="syncTrafficLimit(row)"><Gauge :size="15" />流量</el-button>
+              <el-button size="small" :loading="resettingTrafficIds.has(row.id)" :disabled="!row.inboundId" @click="resetRemoteTraffic(row)"><RotateCcw :size="15" />重置</el-button>
+            </div>
+            <div class="row-action-group">
+              <el-button size="small" @click="editNode(row)"><Edit3 :size="15" />编辑</el-button>
+              <el-button size="small" type="danger" plain @click="removeNode(row)"><Trash2 :size="15" />删除</el-button>
+            </div>
+          </div>
         </template>
       </el-table-column>
     </el-table>

@@ -1,7 +1,7 @@
 ﻿<script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Activity, RefreshCw, Users, Wifi } from 'lucide-vue-next';
+import { Activity, Edit3, Plus, RefreshCw, Trash2, Users, Wifi } from 'lucide-vue-next';
 import { api } from '../api';
 
 type XuiServer = {
@@ -245,15 +245,22 @@ onMounted(loadServers);
 </script>
 
 <template>
-  <h1 class="page-title">连接服务器</h1>
+  <div class="page-head">
+    <div class="page-head-main">
+      <h1 class="page-title">连接服务器</h1>
+      <p>维护 3x-ui 面板连接、证书路径和 Reality 自动创建节点所需配置。</p>
+    </div>
+    <div class="page-actions">
+      <el-button :loading="loading" @click="loadServers"><RefreshCw :size="15" />刷新</el-button>
+    </div>
+  </div>
   <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="page-alert" />
 
   <div class="panel list-panel">
     <div class="panel-toolbar">
       <strong>连接服务器列表</strong>
       <div class="table-toolbar-actions">
-        <el-button type="primary" @click="openDialog">添加连接服务器</el-button>
-        <el-button :loading="loading" @click="loadServers">刷新</el-button>
+        <el-button type="primary" @click="openDialog"><Plus :size="15" />添加连接服务器</el-button>
       </div>
     </div>
     <el-table :data="servers" v-loading="loading" style="width: 100%">
@@ -278,14 +285,20 @@ onMounted(loadServers);
       <el-table-column label="状态" width="90">
         <template #default="{ row }: { row: XuiServer }"><el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag></template>
       </el-table-column>
-      <el-table-column label="操作" width="470" fixed="right">
+      <el-table-column label="操作" width="450" fixed="right">
         <template #default="{ row }: { row: XuiServer }">
-          <el-button size="small" :loading="testingIds.has(row.id)" @click="testSaved(row)"><Wifi :size="15" />测试</el-button>
-          <el-button size="small" :loading="statusIds.has(row.id)" @click="showServerStatus(row)"><Activity :size="15" />状态</el-button>
-          <el-button size="small" :loading="presenceIds.has(row.id)" @click="showClientPresence(row)"><Users :size="15" />在线</el-button>
-          <el-button size="small" :loading="syncingIds.has(row.id)" :disabled="!row.enabled" @click="syncServer(row)"><RefreshCw :size="15" />同步节点</el-button>
-          <el-button size="small" @click="editServer(row)">编辑</el-button>
-          <el-button size="small" type="danger" @click="removeServer(row)">删除</el-button>
+          <div class="row-actions row-actions-split">
+            <div class="row-action-group">
+              <el-button size="small" :loading="testingIds.has(row.id)" @click="testSaved(row)"><Wifi :size="15" />测试</el-button>
+              <el-button size="small" :loading="statusIds.has(row.id)" @click="showServerStatus(row)"><Activity :size="15" />状态</el-button>
+              <el-button size="small" :loading="presenceIds.has(row.id)" @click="showClientPresence(row)"><Users :size="15" />在线</el-button>
+              <el-button size="small" :loading="syncingIds.has(row.id)" :disabled="!row.enabled" @click="syncServer(row)"><RefreshCw :size="15" />同步</el-button>
+            </div>
+            <div class="row-action-group">
+              <el-button size="small" @click="editServer(row)"><Edit3 :size="15" />编辑</el-button>
+              <el-button size="small" type="danger" plain @click="removeServer(row)"><Trash2 :size="15" />删除</el-button>
+            </div>
+          </div>
         </template>
       </el-table-column>
     </el-table>
