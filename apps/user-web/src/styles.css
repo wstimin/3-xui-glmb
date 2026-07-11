@@ -67,14 +67,15 @@ button, input, select { font: inherit; }
 .amount-shortcuts button { height: 36px; border: 1px solid #cbd5e1; border-radius: 8px; background: #fff; color: #334155; cursor: pointer; font-weight: 700; }
 .amount-shortcuts button.active { border-color: #0f766e; background: #ecfdf5; color: #0f513f; }
 .payment-method-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
-.payment-method-button { min-width: 0; min-height: 86px; display: grid; justify-items: center; align-content: center; gap: 6px; border: 1px solid #d7dde8; border-radius: 8px; background: #fff; color: #334155; padding: 10px; text-align: center; cursor: pointer; }
-.payment-method-button svg, .payment-method-button img { width: 26px; height: 26px; color: #0f766e; object-fit: contain; }
-.payment-method-button span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
-.payment-method-button small { min-width: 0; color: #64748b; font-size: 12px; }
+.payment-method-button { min-width: 0; min-height: 92px; display: grid; grid-template-rows: 30px 20px 18px; justify-items: center; align-content: center; gap: 5px; border: 1px solid #d7dde8; border-radius: 8px; background: #fff; color: #334155; padding: 11px 8px; text-align: center; cursor: pointer; }
+.payment-method-button svg, .payment-method-button img { width: 28px; height: 28px; color: #0f766e; object-fit: contain; }
+.payment-method-button span { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #1f2937; font-weight: 800; line-height: 20px; }
+.payment-method-button small { min-width: 0; color: #475569; font-size: 12px; font-weight: 700; line-height: 18px; }
 .payment-method-button.active { border-color: #0f766e; background: #ecfdf5; color: #0f513f; box-shadow: 0 0 0 3px rgb(15 118 110 / 10%); }
-.payment-method-button:disabled { background: #f8fafc; color: #94a3b8; cursor: not-allowed; }
-.payment-method-button:disabled svg, .payment-method-button:disabled small { color: #94a3b8; }
-.payment-method-button:disabled img { filter: grayscale(1); opacity: 0.5; }
+.payment-method-button:disabled { opacity: 1; background: #f8fafc; color: #64748b; cursor: not-allowed; }
+.payment-method-button:disabled span { color: #64748b; }
+.payment-method-button:disabled svg, .payment-method-button:disabled small { color: #64748b; }
+.payment-method-button:disabled img { filter: grayscale(1); opacity: 0.72; }
 .finance-form form { display: grid; grid-template-columns: minmax(0, 1fr) 104px; gap: 10px; }
 .finance-form .card-redeem-form { grid-template-columns: minmax(0, 1fr) 112px; }
 .finance-form input, .finance-form select { min-width: 0; height: 42px; border: 1px solid #cbd5e1; border-radius: 8px; padding: 0 12px; background: #fff; outline: 0; }

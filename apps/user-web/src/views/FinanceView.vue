@@ -76,8 +76,8 @@ function paymentMethod(provider: PaymentProvider, fallbackLabel: string, image: 
 function epayMethod(): PaymentMethod {
   const channel = channelForProvider('epay');
   const type = channel?.type || '';
-  if (type === 'paypal') return { provider: 'epay' as const, label: channel?.name || '易支付 / PayPal', image: paypalIcon, channel };
-  return { provider: 'epay' as const, label: channel?.name || '易支付', icon: Banknote, channel };
+  if (type === 'paypal') return { provider: 'epay' as const, label: channel?.name || '支付通道', image: paypalIcon, channel };
+  return { provider: 'epay' as const, label: channel?.name || '支付通道', icon: Banknote, channel };
 }
 
 function selectPaymentMethod(channel?: PaymentChannel) {
@@ -142,16 +142,6 @@ function openPurchaseUrl() {
   window.open(publicSettings.cardPurchaseUrl, '_blank', 'noopener,noreferrer');
 }
 
-function providerLabel(provider: PaymentProvider) {
-  const labels: Record<PaymentProvider, string> = {
-    alipay: '支付宝',
-    wechat: '微信支付',
-    epay: '易支付',
-    bepusdt: 'BEpusdt'
-  };
-  return labels[provider];
-}
-
 onMounted(loadFinanceData);
 </script>
 
@@ -191,7 +181,7 @@ onMounted(loadFinanceData);
         <input v-model.number="rechargeForm.amount" type="number" min="0.01" step="0.01" placeholder="充值金额" />
         <button :disabled="recharging || !selectedChannel || rechargeForm.amount <= 0">{{ recharging ? '创建中' : '去支付' }}</button>
       </form>
-      <div v-if="selectedChannel" class="empty-hint">当前通道：{{ selectedChannel.name }} / {{ providerLabel(selectedChannel.provider) }}</div>
+      <div v-if="selectedChannel" class="empty-hint">当前通道：{{ selectedChannel.name }}</div>
       <div v-if="!loading && !channels.length" class="empty-hint">管理员未启用在线支付方式</div>
       <div v-if="lastOrder?.qrCode" class="qr-box">
         <img v-if="qrImage" :src="qrImage" alt="支付二维码" />
