@@ -10,11 +10,12 @@ import usdtIcon from '../assets/payments/usdt.webp';
 import wechatIcon from '../assets/payments/wechat.jpg';
 
 type PaymentProvider = 'alipay' | 'wechat' | 'epay' | 'bepusdt';
-type PaymentChannel = { id: string; provider: PaymentProvider; name: string; type?: string };
+type PaymentChannel = { id: string; provider: PaymentProvider; name: string; type?: string; types?: string[] };
 type PaymentMethod = {
   provider: PaymentProvider;
   label: string;
   channel?: PaymentChannel;
+  paymentType?: string;
   image?: string;
   icon?: typeof Banknote;
 };
@@ -29,18 +30,19 @@ const message = ref('');
 const error = ref('');
 const channels = ref<PaymentChannel[]>([]);
 const publicSettings = reactive({ cardPurchaseUrl: '' });
-const rechargeForm = reactive({ amount: 10, channelId: '', provider: 'alipay' as PaymentProvider });
+const rechargeForm = reactive({ amount: 10, channelId: '', provider: 'alipay' as PaymentProvider, paymentType: '' });
 const lastOrder = ref<RechargeOrder | null>(null);
 const qrImage = ref('');
 const quickAmounts = [10, 30, 50, 100];
 
 const selectedChannel = computed(() => channels.value.find((item) => item.id === rechargeForm.channelId));
-const paymentMethods = computed<PaymentMethod[]>(() => ([
+const selectedMethod = computed(() => paymentMethods.value.find((item) => item.channel?.id === rechargeForm.channelId && (item.paymentType || '') === rechargeForm.paymentType));
+const paymentMethods = computed<PaymentMethod[]>(() => [
   paymentMethod('alipay', '支付宝', alipayIcon),
   paymentMethod('wechat', '微信支付', wechatIcon),
-  epayMethod(),
-  paymentMethod('bepusdt', 'BEpusdt', usdtIcon)
-]));
+  ...epayMethods(),
+  paymentMethod('bepusdt', 'USDT', usdtIcon)
+]);
 
 async function loadFinanceData() {
   loading.value = true;
@@ -52,10 +54,7 @@ async function loadFinanceData() {
     ]);
     channels.value = channelResult;
     publicSettings.cardPurchaseUrl = settingsResult.settings.cardPurchaseUrl || '';
-    if (!rechargeForm.channelId && channels.value[0]) {
-      rechargeForm.channelId = channels.value[0].id;
-      rechargeForm.provider = channels.value[0].provider;
-    }
+    if (!selectedMethod.value) selectPaymentMethod(paymentMethods.value.find((item) => item.channel));
   } catch (err) {
     error.value = err instanceof Error ? err.message : '加载财务数据失败';
     notifyError(error.value);
@@ -73,17 +72,36 @@ function paymentMethod(provider: PaymentProvider, fallbackLabel: string, image: 
   return { provider, label: channel?.name || fallbackLabel, image, channel };
 }
 
-function epayMethod(): PaymentMethod {
+function epayMethods(): PaymentMethod[] {
   const channel = channelForProvider('epay');
-  const type = channel?.type || '';
-  if (type === 'paypal') return { provider: 'epay' as const, label: channel?.name || '支付通道', image: paypalIcon, channel };
-  return { provider: 'epay' as const, label: channel?.name || '支付通道', icon: Banknote, channel };
+  const types = channel?.types?.length ? channel.types : channel?.type ? [channel.type] : [];
+  return types.map((type) => ({
+    provider: 'epay' as const,
+    label: epayTypeLabel(type),
+    paymentType: type,
+    image: epayTypeImage(type),
+    icon: epayTypeImage(type) ? undefined : Banknote,
+    channel
+  }));
 }
 
-function selectPaymentMethod(channel?: PaymentChannel) {
-  if (!channel) return;
-  rechargeForm.channelId = channel.id;
-  rechargeForm.provider = channel.provider;
+function selectPaymentMethod(method?: PaymentMethod) {
+  if (!method?.channel) return;
+  rechargeForm.channelId = method.channel.id;
+  rechargeForm.provider = method.provider;
+  rechargeForm.paymentType = method.paymentType || '';
+}
+
+function epayTypeLabel(type: string) {
+  const labels: Record<string, string> = { alipay: '支付宝', wechat: '微信', qqpay: 'QQ钱包', bank: '银行卡', paypal: 'PayPal' };
+  return labels[type] || '在线支付';
+}
+
+function epayTypeImage(type: string) {
+  if (type === 'alipay') return alipayIcon;
+  if (type === 'wechat') return wechatIcon;
+  if (type === 'paypal') return paypalIcon;
+  return '';
 }
 
 function setAmount(amount: number) {
@@ -104,7 +122,8 @@ async function createRechargeOrder() {
       body: {
         amount: rechargeForm.amount,
         channelId: channel.id,
-        provider: channel.provider
+        provider: channel.provider,
+        paymentType: rechargeForm.paymentType
       }
     });
     lastOrder.value = result;
@@ -161,12 +180,12 @@ onMounted(loadFinanceData);
       <div class="payment-method-grid">
         <button
           v-for="method in paymentMethods"
-          :key="method.provider"
+          :key="`${method.provider}:${method.channel?.id || 'empty'}:${method.paymentType || ''}`"
           type="button"
           class="payment-method-button"
-          :class="{ active: method.channel?.id === rechargeForm.channelId }"
+          :class="{ active: method.channel?.id === rechargeForm.channelId && (method.paymentType || '') === rechargeForm.paymentType }"
           :disabled="loading || !method.channel"
-          @click="selectPaymentMethod(method.channel)"
+          @click="selectPaymentMethod(method)"
         >
           <img v-if="method.image" :src="method.image" :alt="method.label" />
           <component :is="method.icon" v-else :size="18" />
@@ -181,7 +200,7 @@ onMounted(loadFinanceData);
         <input v-model.number="rechargeForm.amount" type="number" min="0.01" step="0.01" placeholder="充值金额" />
         <button :disabled="recharging || !selectedChannel || rechargeForm.amount <= 0">{{ recharging ? '创建中' : '去支付' }}</button>
       </form>
-      <div v-if="selectedChannel" class="empty-hint">当前通道：{{ selectedChannel.name }}</div>
+      <div v-if="selectedMethod" class="empty-hint">当前通道：{{ selectedMethod.label }}</div>
       <div v-if="!loading && !channels.length" class="empty-hint">管理员未启用在线支付方式</div>
       <div v-if="lastOrder?.qrCode" class="qr-box">
         <img v-if="qrImage" :src="qrImage" alt="支付二维码" />

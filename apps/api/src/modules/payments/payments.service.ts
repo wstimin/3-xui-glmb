@@ -29,6 +29,8 @@ type CreatePaymentResult = {
   raw?: unknown;
 };
 
+const EPAY_TYPES = ['alipay', 'wechat', 'qqpay', 'bank', 'paypal'];
+
 const RECHARGE_ORDER_TTL_MINUTES = 30;
 
 @Injectable()
@@ -46,7 +48,8 @@ export class PaymentsService {
         id: channel.id,
         provider: channel.provider,
         name: channel.name,
-        type: text(config.type)
+        type: text(config.type),
+        types: enabledEpayTypes(config)
       };
     });
   }
@@ -109,7 +112,7 @@ export class PaymentsService {
     return { deleted: true, id };
   }
 
-  async createOrder(customerId: string, body: { provider?: string; channelId?: string; amount: unknown; returnUrl?: string }) {
+  async createOrder(customerId: string, body: { provider?: string; channelId?: string; amount: unknown; paymentType?: string; returnUrl?: string }) {
     const customer = await this.prisma.customer.findUnique({ where: { id: customerId }, select: { id: true, status: true } });
     if (!customer || customer.status !== 'active') throw new BadRequestException('用户不存在或已禁用');
 
@@ -123,9 +126,10 @@ export class PaymentsService {
     if (amount.lessThanOrEqualTo(0)) throw new BadRequestException('充值金额必须大于 0');
 
     const config = this.configObject(channel.configEnc);
+    const paymentType = this.resolvePaymentType(provider, config, body.paymentType);
     const tradeNo = this.tradeNo();
     const expiresAt = addMinutes(new Date(), RECHARGE_ORDER_TTL_MINUTES);
-    const payment = await this.createPayment(provider, config, {
+    const payment = await this.createPayment(provider, { ...config, type: paymentType }, {
       tradeNo,
       amount,
       expiresAt,
@@ -199,13 +203,14 @@ export class PaymentsService {
     if (!gateway || !pid || !key) throw new ServiceUnavailableException('易支付通道配置不完整');
     const params: Record<string, string> = {
       pid,
-      type: text(config.type) || 'alipay',
       out_trade_no: order.tradeNo,
       notify_url: this.paymentUrl(text(config.notifyUrl), `/api/payments/epay/notify`),
       return_url: this.paymentUrl(order.returnUrl || text(config.returnUrl), `/payment/result?trade_no=${encodeURIComponent(order.tradeNo)}`),
       name: order.subject,
       money: order.amount.toFixed(2)
     };
+    const paymentType = text(config.type);
+    if (paymentType) params.type = paymentType;
     params.sign = md5(sortedSignContent(params, ['sign', 'sign_type']) + key);
     params.sign_type = 'MD5';
     return { payUrl: `${gateway}?${new URLSearchParams(params).toString()}`, raw: { request: params } };
@@ -463,6 +468,7 @@ export class PaymentsService {
       productName: text(input.productName),
       mchId: text(input.mchId),
       type: text(input.type),
+      types: provider === 'epay' ? paymentTypes(input.types) : [],
       notifyUrl: text(input.notifyUrl),
       returnUrl: text(input.returnUrl)
     };
@@ -493,6 +499,9 @@ export class PaymentsService {
     if (provider === 'epay' && (!text(config.url) || !text(config.pid) || !this.secret(config, 'key'))) {
       throw new BadRequestException('易支付启用前必须填写接口地址、商户号和密钥');
     }
+    if (provider === 'epay' && !enabledEpayTypes(config).length) {
+      throw new BadRequestException('易支付启用前至少选择一个用户端支付子类');
+    }
     if (provider === 'bepusdt' && (!text(config.url) || !this.secret(config, 'token'))) {
       throw new BadRequestException('BEpusdt 启用前必须填写接口地址和 Token');
     }
@@ -522,6 +531,7 @@ export class PaymentsService {
         productName: text(config.productName),
         mchId: text(config.mchId),
         type: text(config.type),
+        types: enabledEpayTypes(config),
         notifyUrl: text(config.notifyUrl),
         returnUrl: text(config.returnUrl)
       },
@@ -538,6 +548,16 @@ export class PaymentsService {
 
   private configObject(value: Prisma.JsonValue): PaymentConfig {
     return value && typeof value === 'object' && !Array.isArray(value) ? value as PaymentConfig : {};
+  }
+
+  private resolvePaymentType(provider: PaymentProvider, config: PaymentConfig, requested: unknown) {
+    const requestedType = text(requested);
+    if (provider !== 'epay') return text(config.type);
+    const enabledTypes = enabledEpayTypes(config);
+    if (!enabledTypes.length) throw new ServiceUnavailableException('易支付通道未启用用户端支付子类');
+    if (!requestedType) return enabledTypes[0];
+    if (!enabledTypes.includes(requestedType)) throw new BadRequestException('该支付子类未启用');
+    return requestedType;
   }
 
   private secret(config: PaymentConfig, ...keys: string[]) {
@@ -711,6 +731,17 @@ function toJsonValue(value: unknown): Prisma.InputJsonValue {
 
 function compactConfig(config: PaymentConfig) {
   return Object.fromEntries(Object.entries(config).filter(([, value]) => value !== undefined && value !== null && value !== ''));
+}
+
+function paymentTypes(value: unknown) {
+  const list = Array.isArray(value) ? value : text(value) ? [text(value)] : [];
+  return [...new Set(list.map((item) => text(item)).filter((item) => EPAY_TYPES.includes(item)))];
+}
+
+function enabledEpayTypes(config: PaymentConfig) {
+  const types = paymentTypes(config.types);
+  if (types.length) return types;
+  return paymentTypes(config.type);
 }
 
 function isUniqueError(error: unknown) {

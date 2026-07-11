@@ -17,6 +17,7 @@ export const paymentChannelConfigSchema = z.object({
   mchId: z.string().trim().max(120).optional().or(z.literal('')),
   apiKey: z.string().trim().max(2048).optional().or(z.literal('')),
   type: z.string().trim().max(80).optional().or(z.literal('')),
+  types: z.array(z.string().trim().max(80)).optional(),
   notifyUrl: z.string().trim().url().optional().or(z.literal('')),
   returnUrl: z.string().trim().url().optional().or(z.literal(''))
 });
@@ -33,6 +34,7 @@ export const rechargeOrderCreateSchema = z.object({
   provider: paymentChannelProviderSchema,
   amount: moneySchema,
   channelId: z.string().min(1).optional(),
+  paymentType: z.string().trim().max(80).optional().or(z.literal('')),
   returnUrl: z.string().url().optional()
 });
 

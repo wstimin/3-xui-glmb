@@ -80,6 +80,10 @@ body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; back
 .payment-dialog-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
 .payment-dialog-form .el-form-item { margin-bottom: 0; }
 .payment-dialog-form .el-form-item:nth-child(n + 10) { grid-column: 1 / -1; }
+.epay-type-group { display: flex; flex-wrap: wrap; gap: 8px; }
+.epay-type-group .el-checkbox-button__inner { border-left: 1px solid var(--el-border-color); border-radius: 999px; padding: 8px 14px; font-weight: 700; }
+.epay-type-group .el-checkbox-button:first-child .el-checkbox-button__inner,
+.epay-type-group .el-checkbox-button:last-child .el-checkbox-button__inner { border-radius: 999px; }
 .bind-panel { margin-bottom: 16px; }
 .bind-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 96px; gap: 12px; }
 .bind-row-wide { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(180px, 1fr) 220px 96px; }
