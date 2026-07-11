@@ -15,10 +15,20 @@ export class XuiController {
   @Roles('admin')
   test(@Body(new ZodValidationPipe(xuiServerUpsertSchema)) body: z.infer<typeof xuiServerUpsertSchema>) { return this.xui.testConnection(body); }
 
+  @Post('admin/xui/certs')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  testCertFiles(@Body(new ZodValidationPipe(xuiServerUpsertSchema)) body: z.infer<typeof xuiServerUpsertSchema>) { return this.xui.testConnectionCertFiles(body); }
+
   @Post('admin/xui-servers/:id/test')
   @UseGuards(AuthGuard)
   @Roles('admin')
   testStoredServer(@Param('id') id: string) { return this.xui.testStoredServer(id); }
+
+  @Get('admin/xui-servers/:id/certs')
+  @UseGuards(AuthGuard)
+  @Roles('admin')
+  storedServerCertFiles(@Param('id') id: string) { return this.xui.storedServerCertFiles(id); }
 
   @Get('admin/xui-servers/:id/status')
   @UseGuards(AuthGuard)

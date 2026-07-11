@@ -114,6 +114,25 @@ export class XuiService {
     return { connected: true, serverId: id, enabled: server.enabled, inboundCount: this.xuiArray(inbounds).length, inbounds };
   }
 
+  async testConnectionCertFiles(input: z.infer<typeof xuiServerUpsertSchema>) {
+    const client = await this.createAuthenticatedClient({
+      baseUrl: input.baseUrl,
+      basePath: input.basePath,
+      token: input.token,
+      username: input.username,
+      password: input.password
+    });
+    return this.readWebCertFiles(client);
+  }
+
+  async storedServerCertFiles(id: string) {
+    const server = await this.prisma.xuiServer.findUnique({ where: { id } });
+    if (!server) throw new NotFoundException('3x-ui server not found');
+
+    const client = await this.createAuthenticatedClient(server);
+    return this.readWebCertFiles(client);
+  }
+
   async storedServerStatus(id: string) {
     const server = await this.prisma.xuiServer.findUnique({ where: { id } });
     if (!server) throw new NotFoundException('3x-ui server not found');
@@ -1122,13 +1141,26 @@ export class XuiService {
   }
 
   private async resolveWebCertFiles(client: XuiClient) {
+    const result = await this.readWebCertFiles(client);
+    const certFile = result.certFile;
+    const keyFile = result.keyFile;
+    if (!certFile || !keyFile) throw new BadGatewayException('3x-ui 没有返回可用的 TLS 证书路径，请先在 3x-ui 面板配置 Web 证书，或选择 Reality/none');
+    return { certFile, keyFile };
+  }
+
+  private async readWebCertFiles(client: XuiClient) {
     const payload = await client.getWebCertFiles();
     this.assertXuiSuccess(payload);
     const object = this.xuiObject(this.xuiObject(payload).obj || this.xuiObject(payload).data || payload);
-    const certFile = String(object.certFile || object.certificateFile || object.cert || object.certPath || object.publicKeyPath || '').trim();
-    const keyFile = String(object.keyFile || object.privateKeyFile || object.key || object.keyPath || object.privateKeyPath || '').trim();
-    if (!certFile || !keyFile) throw new BadGatewayException('3x-ui 没有返回可用的 TLS 证书路径，请先在 3x-ui 面板配置 Web 证书，或选择 Reality/none');
-    return { certFile, keyFile };
+    const certFile = String(object.webCertFile || object.certFile || object.certificateFile || object.cert || object.certPath || object.publicKeyPath || '').trim();
+    const keyFile = String(object.webKeyFile || object.keyFile || object.privateKeyFile || object.key || object.keyPath || object.privateKeyPath || '').trim();
+    return {
+      found: Boolean(certFile && keyFile),
+      certFile,
+      keyFile,
+      message: certFile && keyFile ? '已读取到 3x-ui 面板 Web 证书路径' : '3x-ui 没有返回完整的 Web 证书路径',
+      raw: payload
+    };
   }
 
   private async resolveTlsCertFiles(client: XuiClient, serverConfig: Record<string, unknown>) {

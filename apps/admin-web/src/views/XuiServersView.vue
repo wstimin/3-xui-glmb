@@ -26,12 +26,15 @@ type XuiServer = {
 };
 
 type SyncResult = { total: number; created: number; updated: number; skipped: number };
+type CertResult = { found: boolean; certFile: string; keyFile: string; message?: string; raw?: unknown };
 
 const servers = ref<XuiServer[]>([]);
 const loading = ref(false);
 const saving = ref(false);
 const testingForm = ref(false);
+const testingCertForm = ref(false);
 const testingIds = ref<Set<string>>(new Set());
+const certIds = ref<Set<string>>(new Set());
 const syncingIds = ref<Set<string>>(new Set());
 const statusIds = ref<Set<string>>(new Set());
 const presenceIds = ref<Set<string>>(new Set());
@@ -107,6 +110,55 @@ async function testSaved(server: XuiServer) {
     next.delete(server.id);
     testingIds.value = next;
   }
+}
+
+async function testFormCerts() {
+  testingCertForm.value = true;
+  error.value = '';
+  try {
+    const result = await api<CertResult>('/api/admin/xui/certs', { method: 'POST', body: cleanFormBody() });
+    await showCertResult(result, '表单证书检测', true);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '读取面板证书失败';
+  } finally {
+    testingCertForm.value = false;
+  }
+}
+
+async function testSavedCerts(server: XuiServer) {
+  certIds.value = new Set(certIds.value).add(server.id);
+  error.value = '';
+  try {
+    const result = await api<CertResult>(`/api/admin/xui-servers/${server.id}/certs`);
+    await showCertResult(result, `${server.name} 证书检测`, false);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : '读取已保存面板证书失败';
+  } finally {
+    const next = new Set(certIds.value);
+    next.delete(server.id);
+    certIds.value = next;
+  }
+}
+
+async function showCertResult(result: CertResult, title: string, allowFill: boolean) {
+  const raw = JSON.stringify(result.raw ?? null, null, 2);
+  const content = [
+    result.message || (result.found ? '已读取到证书路径' : '没有读取到完整证书路径'),
+    '',
+    `证书路径: ${result.certFile || '-'}`,
+    `私钥路径: ${result.keyFile || '-'}`,
+    '',
+    '接口返回:',
+    raw.length > 1200 ? `${raw.slice(0, 1200)}...` : raw
+  ].join('\n');
+  if (allowFill && result.found) {
+    await ElMessageBox.confirm(content, title, { type: 'success', confirmButtonText: '回填路径', cancelButtonText: '只查看' });
+    form.tlsCertFile = result.certFile;
+    form.tlsKeyFile = result.keyFile;
+    ElMessage.success('证书路径已回填');
+    return;
+  }
+  await ElMessageBox.alert(content, title, { type: result.found ? 'success' : 'warning' });
 }
 
 async function syncServer(server: XuiServer) {
@@ -326,12 +378,13 @@ onMounted(loadServers);
       <el-table-column label="状态" width="90">
         <template #default="{ row }: { row: XuiServer }"><el-tag :type="row.enabled ? 'success' : 'info'">{{ row.enabled ? '启用' : '停用' }}</el-tag></template>
       </el-table-column>
-      <el-table-column label="操作" width="450" fixed="right">
+      <el-table-column label="操作" width="520" fixed="right">
         <template #default="{ row }: { row: XuiServer }">
           <div class="row-actions row-actions-split">
             <div class="row-action-group remote-action">
               <span class="action-group-label">远端读取</span>
               <el-button size="small" :loading="testingIds.has(row.id)" @click="testSaved(row)"><Wifi :size="15" />测试</el-button>
+              <el-button size="small" :loading="certIds.has(row.id)" @click="testSavedCerts(row)"><Activity :size="15" />证书</el-button>
               <el-button size="small" :loading="statusIds.has(row.id)" @click="showServerStatus(row)"><Activity :size="15" />状态</el-button>
               <el-button size="small" :loading="presenceIds.has(row.id)" @click="showClientPresence(row)"><Users :size="15" />在线</el-button>
               <el-button size="small" :loading="syncingIds.has(row.id)" :disabled="!row.enabled" @click="syncServer(row)"><RefreshCw :size="15" />同步</el-button>
@@ -374,6 +427,7 @@ onMounted(loadServers);
           <el-form-item label="TLS 域名"><el-input v-model="form.tlsServerName" placeholder="例如 panel.example.com" /></el-form-item>
           <el-form-item label="证书路径"><el-input v-model="form.tlsCertFile" placeholder="例如 /root/cert/fullchain.pem" /></el-form-item>
           <el-form-item label="私钥路径"><el-input v-model="form.tlsKeyFile" placeholder="例如 /root/cert/privkey.pem" /></el-form-item>
+          <el-form-item label="证书检测" class="form-item-full"><el-button :loading="testingCertForm" :disabled="!form.baseUrl" @click="testFormCerts"><Activity :size="15" />读取 3x-ui 证书</el-button></el-form-item>
         </div>
       </section>
 
