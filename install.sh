@@ -63,7 +63,7 @@ prompt_required() {
 }
 
 require_root() {
-  [ "$(id -u)" -eq 0 ] || die "Please run as root: sudo bash install.sh"
+  [ "$(id -u)" -eq 0 ] || die "Please switch to root and run: bash install.sh"
   command -v systemctl >/dev/null 2>&1 || die "systemd is required"
 }
 
@@ -601,7 +601,7 @@ die() { echo "ERROR: \$*" >&2; exit 1; }
 pause() { echo; read -r -p "按回车键返回菜单..." _; }
 
 require_root() {
-  [ "\$(id -u)" -eq 0 ] || die "请使用 root 执行：sudo shiye"
+  [ "\$(id -u)" -eq 0 ] || die "请切换 root 用户后执行：shiye"
 }
 
 to_lower() { printf "%s" "\$1" | tr '[:upper:]' '[:lower:]'; }
@@ -889,7 +889,7 @@ main() {
   echo "systemctl status ${APP_NAME}"
   echo "systemctl restart ${APP_NAME}"
   echo "journalctl -u ${APP_NAME} -f"
-  echo "shiye  # open management menu"
+  echo "shiye  # 打开管理菜单"
 }
 
 main "$@"

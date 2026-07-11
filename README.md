@@ -26,18 +26,18 @@
 
 ## 一键部署
 
-服务器上直接执行，默认安装到 `/opt/shiye`，服务名 `shiye-api`。脚本会询问访问方式：选择跳过域名就是 `IP:3388` 访问；选择域名访问会继续输入域名，并可自动申请 HTTPS 证书。
+服务器上直接执行，默认安装到 `/opt/shiye`，服务名 `shiye-api`。下面命令默认在 `root` 用户下执行；如果当前不是 `root`，请先切换到 `root` 用户。脚本会询问访问方式：选择跳过域名就是 `IP:3388` 访问；选择域名访问会继续输入域名，并可自动申请 HTTPS 证书。
 
 一键脚本默认是精简运行目录：构建时只获取必要项目文件，安装完成后 `/opt/shiye` 只保留运行必需文件，例如 `.env`、`dist`、`node_modules`、`package*.json`、`apps/api/dist`、`packages/*/dist`、`prisma/schema.prisma` 和迁移文件。README、部署文档、安装脚本、前端源码、后端源码和 `.git` 默认不会保留在服务器运行目录。
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh)"
 ```
 
 安装完成后脚本会写入管理菜单命令，服务器上可随时执行：
 
 ```bash
-sudo shiye
+shiye
 ```
 
 菜单标题只显示“管理面板”，包含安装/更新项目、查看状态、重启服务、查看日志、配置或取消域名、重新构建、数据库迁移、备份和卸载入口。
@@ -45,31 +45,31 @@ sudo shiye
 也可以提前带入域名和 HTTPS 参数，直接部署：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh | sudo env DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes CERTBOT_EMAIL=admin@example.com bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh | env DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes CERTBOT_EMAIL=admin@example.com bash
 ```
 
 服务器项目根目录执行：
 
 ```bash
-sudo bash install.sh
+bash install.sh
 ```
 
 带域名和 HTTPS：
 
 ```bash
-sudo DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes bash install.sh
+DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes bash install.sh
 ```
 
 一键卸载，默认保留数据库：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | bash
 ```
 
 彻底卸载并删除默认数据库：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | sudo env DELETE_DATABASE=yes bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | env DELETE_DATABASE=yes bash
 ```
 
 详细说明见 [DEPLOY.md](./DEPLOY.md)。

@@ -45,7 +45,7 @@ ask_yes_no() {
 }
 
 require_root() {
-  [ "$(id -u)" -eq 0 ] || die "Please run as root: sudo bash uninstall.sh"
+  [ "$(id -u)" -eq 0 ] || die "Please switch to root and run: bash uninstall.sh"
 }
 
 normalize_app_dir() {

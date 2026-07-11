@@ -14,7 +14,7 @@
 
 ## 2. 一键脚本部署
 
-服务器上直接执行，默认安装到 `/opt/shiye`，服务名 `shiye-api`。脚本会询问访问方式：选择跳过域名就是 `IP:3388` 访问；选择域名访问会继续输入域名，并可自动申请 HTTPS 证书。
+服务器上直接执行，默认安装到 `/opt/shiye`，服务名 `shiye-api`。下面命令默认在 `root` 用户下执行；如果当前不是 `root`，请先切换到 `root` 用户。脚本会询问访问方式：选择跳过域名就是 `IP:3388` 访问；选择域名访问会继续输入域名，并可自动申请 HTTPS 证书。
 
 一键脚本默认按“精简运行目录”部署：构建阶段只获取必要项目文件，安装完成后会删除构建期才需要的文件。`/opt/shiye` 默认只保留运行必需项：
 
@@ -34,13 +34,13 @@
 README、部署文档、安装脚本、前端源码、后端源码、seed 文件、示例配置和 `.git` 默认不会保留在服务器运行目录。
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh)"
 ```
 
 安装完成后会写入 `/usr/local/bin/shiye`，后续常用运维可以直接打开管理菜单：
 
 ```bash
-sudo shiye
+shiye
 ```
 
 菜单标题只显示“管理面板”，实际入口如下：
@@ -65,13 +65,13 @@ sudo shiye
 也可以提前带入域名和 HTTPS 参数，直接部署：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh | sudo env DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes CERTBOT_EMAIL=admin@example.com bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh | env DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes CERTBOT_EMAIL=admin@example.com bash
 ```
 
 把仓库上传到服务器后，在项目根目录执行：
 
 ```bash
-sudo bash install.sh
+bash install.sh
 ```
 
 脚本会执行以下动作：
@@ -88,13 +88,13 @@ sudo bash install.sh
 常用参数示例：
 
 ```bash
-sudo DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes bash install.sh
+DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes bash install.sh
 ```
 
 使用外部数据库：
 
 ```bash
-sudo DATABASE_URL='mysql://shiye:strong-password@127.0.0.1:3306/shiye_management' bash install.sh
+DATABASE_URL='mysql://shiye:strong-password@127.0.0.1:3306/shiye_management' bash install.sh
 ```
 
 脚本默认安装目录是 `/opt/shiye`，服务名是 `shiye-api`。可以通过 `APP_DIR`、`APP_NAME` 修改。
@@ -157,9 +157,9 @@ npm start
 如果项目部署在 `/opt/shiye`，可以直接使用：
 
 ```bash
-sudo cp infra/systemd/shiye-api.service /etc/systemd/system/shiye-api.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now shiye-api
+cp infra/systemd/shiye-api.service /etc/systemd/system/shiye-api.service
+systemctl daemon-reload
+systemctl enable --now shiye-api
 ```
 
 查看日志：
@@ -175,9 +175,9 @@ journalctl -u shiye-api -f
 如果项目部署在 `/opt/shiye`，修改 `server_name` 后可复制使用：
 
 ```bash
-sudo cp infra/nginx/shiye.conf /etc/nginx/conf.d/shiye.conf
-sudo nginx -t
-sudo systemctl reload nginx
+cp infra/nginx/shiye.conf /etc/nginx/conf.d/shiye.conf
+nginx -t
+systemctl reload nginx
 ```
 
 访问入口：
@@ -215,7 +215,7 @@ https://panel.example.com/payment/result?trade_no=订单号
 默认精简部署时，`/opt/shiye` 不是 Git 仓库，不能直接 `git pull`。推荐重新执行一键脚本，脚本会保留现有 `.env`，重新获取最新项目文件、迁移数据库、构建并重启服务：
 
 ```bash
-sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh)"
 ```
 
 重复执行一键脚本的行为是“更新部署”，不是清库重装：
@@ -228,7 +228,7 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuig
 如果上一次选择了域名/Nginx，更新时建议继续带同样域名参数，避免 `PUBLIC_WEB_URL` 被改回 IP + 端口：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh | sudo env DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes CERTBOT_EMAIL=admin@example.com bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/install.sh | env DOMAIN=panel.example.com ENABLE_NGINX=yes ENABLE_HTTPS=yes CERTBOT_EMAIL=admin@example.com bash
 ```
 
 如果你是手动上传完整源码部署，可以使用源码更新方式：
@@ -238,7 +238,7 @@ git pull
 npm ci
 npm run install:prod
 npm prune --omit=dev
-sudo systemctl restart shiye-api
+systemctl restart shiye-api
 ```
 
 ## 8. 备份和恢复
@@ -287,13 +287,13 @@ npm run deploy:check
 默认卸载程序、服务和 Nginx 配置，保留数据库：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | bash
 ```
 
 彻底卸载并删除默认数据库：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | sudo env DELETE_DATABASE=yes bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | env DELETE_DATABASE=yes bash
 ```
 
 删除数据库对应的原始 MySQL 命令见 `UNINSTALL.md`。
