@@ -1,4 +1,4 @@
-import { Controller, Post, ServiceUnavailableException, UseGuards } from '@nestjs/common';
+import { Controller, Post, UseGuards } from '@nestjs/common';
 import { AuthGuard } from '../../shared/auth.guard.js';
 import { Roles } from '../../shared/roles.decorator.js';
 import { JobsService } from './jobs.service.js';
@@ -16,6 +16,6 @@ export class JobsController {
 
   @Post('sync-traffic')
   syncTraffic() {
-    throw new ServiceUnavailableException('流量同步任务暂未启用');
+    return this.jobs.disableTrafficExceededNodes('manual');
   }
 }
