@@ -288,7 +288,9 @@ export class NodesService {
   async deleteServiceNode(id: string) {
     const current = await this.ensureServiceNode(id);
     const remoteClientCleanup = { skipped: true, reason: 'clients belong to the service-node inbound and are removed with the inbound' };
-    if (current.inboundId) await this.xui.syncServiceNodeRemoteConfig(id, { removeOnly: true }).catch(() => undefined);
+    const remoteConfigCleanup = current.inboundId
+      ? await this.xui.syncServiceNodeRemoteConfig(id, { removeOnly: true })
+      : { skipped: true, reason: 'service node has no inbound ID' };
     const remoteInboundCleanup = await this.xui.deleteManagedServiceNodeInbound(id);
     const customerNodes = await this.prisma.customerNode.findMany({ where: { serviceNodeId: id }, select: { id: true } });
     const customerNodeIds = customerNodes.map((node) => node.id);
@@ -297,7 +299,7 @@ export class NodesService {
       this.prisma.customerNode.deleteMany({ where: { serviceNodeId: id } }),
       this.prisma.serviceNode.delete({ where: { id } })
     ]);
-    return { deleted: true, id, remoteClientCleanup, remoteInboundCleanup };
+    return { deleted: true, id, remoteClientCleanup, remoteConfigCleanup, remoteInboundCleanup };
   }
 
   async syncServiceNodeTrafficLimit(id: string) {

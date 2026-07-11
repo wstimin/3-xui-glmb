@@ -880,7 +880,7 @@ export class XuiService {
       const client = await this.createAuthenticatedClient(server);
       return await this.deleteRemoteClientWithClient(client, server.id || null, xuiEmail, keepTraffic, detail);
     } catch (error) {
-      if (/not found|record not found|404/i.test(this.errorMessage(error))) {
+      if (this.isRemoteNotFound(error)) {
         await this.writeSyncLog(server.id || null, 'customer-node-delete', 'success', `Remote client already absent: ${xuiEmail}`, { ...detail, xuiEmail, keepTraffic });
         return { deleted: true, xuiEmail, alreadyAbsent: true };
       }
@@ -890,6 +890,11 @@ export class XuiService {
   }
 
   private async deleteRemoteClientWithClient(client: XuiClient, serverId: string | null | undefined, xuiEmail: string, keepTraffic: boolean, detail: Record<string, unknown>) {
+    const beforeDelete = await this.remoteClientExists(client, xuiEmail);
+    if (!beforeDelete.exists) {
+      await this.writeSyncLog(serverId || null, 'customer-node-delete', 'success', `Remote client already absent: ${xuiEmail}`, { ...detail, xuiEmail, keepTraffic, beforeDelete });
+      return { deleted: true, xuiEmail, alreadyAbsent: true, verified: { absent: true, checked: true, retried: false } };
+    }
     const payload = await client.deleteClient(xuiEmail, keepTraffic);
     this.assertXuiSuccess(payload);
     const verified = await this.verifyRemoteClientDeleted(client, xuiEmail, keepTraffic);
@@ -1369,7 +1374,7 @@ export class XuiService {
   }
 
   private isRemoteNotFound(error: unknown) {
-    return /not found|record not found|404|不存在|未找到|没有找到|not exist|does not exist/i.test(this.errorMessage(error));
+    return /not found|record not found|404|不存在|未找到|没有找到|未发现|未查询到|找不到|not exist|does not exist|no .*found|empty/i.test(this.errorMessage(error));
   }
 
   private assertXuiSuccess(payload: unknown) {
