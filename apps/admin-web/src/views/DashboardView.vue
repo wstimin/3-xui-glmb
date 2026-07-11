@@ -52,7 +52,7 @@ async function loadDashboard() {
     paymentChannels.value = channelResult;
     jobSettings.value = settingsResult;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '加载概览失败';
+    error.value = err instanceof Error ? err.message : '加载数据概览失败';
   } finally {
     loading.value = false;
   }
@@ -115,7 +115,7 @@ onMounted(loadDashboard);
 <template>
   <div class="page-head">
     <div class="page-head-main">
-      <h1 class="page-title">概览</h1>
+      <h1 class="page-title">数据概览</h1>
       <p>查看系统初始化状态、核心资源数量和后台自动任务。</p>
     </div>
     <div class="page-actions">
@@ -127,7 +127,7 @@ onMounted(loadDashboard);
   <div class="metric-grid" :class="{ loading }">
     <div class="metric"><span>用户总数</span><strong>{{ customers.total }}</strong><small>当前页活跃 {{ activeCustomers }}</small></div>
     <div class="metric"><span>路由节点</span><strong>{{ serviceNodes.length }}</strong><small>已启用 {{ enabledNodes }}</small></div>
-    <div class="metric"><span>连接服务器</span><strong>{{ servers.length }}</strong><small>已启用 {{ enabledServers }}</small></div>
+    <div class="metric"><span>面板连接</span><strong>{{ servers.length }}</strong><small>已启用 {{ enabledServers }}</small></div>
     <div class="metric"><span>卡密总数</span><strong>{{ cards.total }}</strong><small>当前页未使用 {{ unusedCards }}</small></div>
   </div>
 
@@ -141,7 +141,7 @@ onMounted(loadDashboard);
         <strong>{{ enabledPaymentChannels ? `已启用 ${enabledPaymentChannels} 个通道` : '未启用' }}</strong>
       </div>
       <div>
-        <span>连接服务器</span>
+        <span>面板连接</span>
         <strong>{{ enabledServers }}/{{ servers.length }} 可用</strong>
       </div>
       <div>

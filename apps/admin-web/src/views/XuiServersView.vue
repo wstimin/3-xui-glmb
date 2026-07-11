@@ -51,7 +51,7 @@ async function loadServers() {
   try {
     servers.value = await api<XuiServer[]>('/api/admin/xui-servers');
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '加载连接服务器失败';
+    error.value = err instanceof Error ? err.message : '加载面板连接失败';
   } finally {
     loading.value = false;
   }
@@ -63,12 +63,12 @@ async function saveServer() {
   try {
     const path = editingId.value ? `/api/admin/xui-servers/${editingId.value}` : '/api/admin/xui-servers';
     await api(path, { method: editingId.value ? 'PATCH' : 'POST', body: cleanFormBody() });
-    ElMessage.success(editingId.value ? '连接服务器已更新' : '连接服务器已添加');
+    ElMessage.success(editingId.value ? '面板连接已更新' : '面板连接已添加');
     dialogVisible.value = false;
     resetForm();
     await loadServers();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '保存连接服务器失败';
+    error.value = err instanceof Error ? err.message : '保存面板连接失败';
   } finally {
     saving.value = false;
   }
@@ -95,7 +95,7 @@ async function testSaved(server: XuiServer) {
     const result = await api<{ inboundCount: number }>(`/api/admin/xui-servers/${server.id}/test`, { method: 'POST' });
     ElMessage.success(`${server.name} 连接成功，入站数量：${result.inboundCount}`);
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '测试已保存连接服务器失败';
+    error.value = err instanceof Error ? err.message : '测试已保存面板连接失败';
   } finally {
     const next = new Set(testingIds.value);
     next.delete(server.id);
@@ -136,7 +136,7 @@ async function showServerStatus(server: XuiServer) {
       `Available versions: ${(result.versions || []).slice(0, 5).join(', ') || '-'}`
     ].join('\n'), `${server.name} status`, { type: 'info' });
   } catch (err) {
-    error.value = err instanceof Error ? err.message : '读取连接服务器状态失败';
+    error.value = err instanceof Error ? err.message : '读取面板连接状态失败';
   } finally {
     const next = new Set(statusIds.value);
     next.delete(server.id);
@@ -195,9 +195,9 @@ function editServer(server: XuiServer) {
 }
 
 async function removeServer(server: XuiServer) {
-  await ElMessageBox.confirm(`确认删除连接服务器“${server.name}”？有关联路由节点时请先处理节点。`, '删除确认', { type: 'warning' });
+  await ElMessageBox.confirm(`确认删除面板连接“${server.name}”？有关联路由节点时请先处理节点。`, '删除确认', { type: 'warning' });
   await api(`/api/admin/xui-servers/${server.id}`, { method: 'DELETE' });
-  ElMessage.success('连接服务器已删除');
+  ElMessage.success('面板连接已删除');
   await loadServers();
 }
 
@@ -252,7 +252,7 @@ onMounted(loadServers);
 <template>
   <div class="page-head">
     <div class="page-head-main">
-      <h1 class="page-title">连接服务器</h1>
+      <h1 class="page-title">面板连接</h1>
       <p>维护 3x-ui 面板连接、证书路径和 Reality 自动创建节点所需配置。</p>
     </div>
     <div class="page-actions">
@@ -262,7 +262,7 @@ onMounted(loadServers);
   <el-alert v-if="error" :title="error" type="error" show-icon :closable="false" class="page-alert" />
 
   <div class="metric-grid compact-metrics">
-    <div class="metric"><span>连接服务器</span><strong>{{ servers.length }}</strong><small>启用 {{ enabledServerCount }}</small></div>
+    <div class="metric"><span>面板连接</span><strong>{{ servers.length }}</strong><small>启用 {{ enabledServerCount }}</small></div>
     <div class="metric"><span>Token 凭据</span><strong>{{ tokenServerCount }}</strong><small>优先使用 API Token</small></div>
     <div class="metric"><span>TLS 证书</span><strong>{{ tlsServerCount }}</strong><small>可自动创建 TLS 节点</small></div>
     <div class="metric"><span>Reality 自动</span><strong>{{ realityAutoCount }}</strong><small>目标或 SNI 留空自动生成</small></div>
@@ -270,9 +270,9 @@ onMounted(loadServers);
 
   <div class="panel list-panel">
     <div class="panel-toolbar">
-      <strong>连接服务器列表</strong>
+      <strong>面板连接列表</strong>
       <div class="table-toolbar-actions">
-        <el-button type="primary" @click="openDialog"><Plus :size="15" />添加连接服务器</el-button>
+        <el-button type="primary" @click="openDialog"><Plus :size="15" />添加面板连接</el-button>
       </div>
     </div>
     <el-table :data="servers" v-loading="loading" style="width: 100%">
@@ -318,7 +318,7 @@ onMounted(loadServers);
     </el-table>
   </div>
 
-  <el-dialog v-model="dialogVisible" :title="editingId ? '编辑连接服务器' : '添加连接服务器'" width="min(900px, 94vw)" destroy-on-close>
+  <el-dialog v-model="dialogVisible" :title="editingId ? '编辑面板连接' : '添加面板连接'" width="min(900px, 94vw)" destroy-on-close>
     <el-form :model="form" label-width="96px" class="sectioned-dialog-form">
       <section class="dialog-form-section">
         <div class="dialog-section-head"><strong>连接信息</strong><span>3x-ui 面板地址、路径和启用状态</span></div>

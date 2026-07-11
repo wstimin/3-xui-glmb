@@ -155,7 +155,7 @@ onMounted(loadLogs);
     </div>
 
     <div class="filter-bar">
-      <el-select v-model="filters.serverId" clearable placeholder="连接服务器" style="width: 190px" @change="loadLogs">
+      <el-select v-model="filters.serverId" clearable placeholder="面板连接" style="width: 190px" @change="loadLogs">
           <el-option v-for="server in servers" :key="server.id" :label="server.name" :value="server.id" />
         </el-select>
       <el-select v-model="filters.action" clearable placeholder="动作" style="width: 230px" @change="loadLogs">
@@ -171,7 +171,7 @@ onMounted(loadLogs);
 
     <el-table :data="logs" v-loading="loading" style="width: 100%" row-key="id">
       <el-table-column label="时间" min-width="170"><template #default="{ row }: { row: SyncLog }">{{ formatDate(row.createdAt) }}</template></el-table-column>
-      <el-table-column label="连接服务器" min-width="160"><template #default="{ row }: { row: SyncLog }">{{ row.server?.name || '-' }}</template></el-table-column>
+      <el-table-column label="面板连接" min-width="160"><template #default="{ row }: { row: SyncLog }">{{ row.server?.name || '-' }}</template></el-table-column>
       <el-table-column label="动作" min-width="210"><template #default="{ row }: { row: SyncLog }">{{ actionLabel(row.action) }}</template></el-table-column>
       <el-table-column label="状态" width="100">
         <template #default="{ row }: { row: SyncLog }"><el-tag :type="statusType(row.status)">{{ statusLabel(row.status) }}</el-tag></template>

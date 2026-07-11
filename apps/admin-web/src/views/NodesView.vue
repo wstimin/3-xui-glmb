@@ -342,7 +342,7 @@ onMounted(loadNodes);
     </div>
     <el-table :data="nodes" v-loading="loading" style="width: 100%">
       <el-table-column prop="name" label="名称" min-width="140" />
-      <el-table-column label="连接服务器" min-width="140">
+      <el-table-column label="面板连接" min-width="140">
         <template #default="{ row }: { row: ServiceNode }">{{ row.server?.name || '-' }}</template>
       </el-table-column>
       <el-table-column prop="inboundId" label="入站 ID" width="100" />
@@ -387,10 +387,10 @@ onMounted(loadNodes);
   <el-dialog v-model="dialogVisible" :title="editingId ? '编辑路由节点' : '添加路由节点'" width="min(920px, 94vw)" destroy-on-close>
     <el-form :model="form" label-width="112px" class="sectioned-dialog-form">
       <section class="dialog-form-section">
-        <div class="dialog-section-head"><strong>基础信息</strong><span>节点名称、所属连接服务器和启用状态</span></div>
+        <div class="dialog-section-head"><strong>基础信息</strong><span>节点名称、所属面板连接和启用状态</span></div>
         <div class="dialog-form-grid">
           <el-form-item label="节点名称"><el-input v-model="form.name" /></el-form-item>
-          <el-form-item label="连接服务器">
+          <el-form-item label="面板连接">
             <el-select v-model="form.serverId" placeholder="选择服务器" style="width: 100%">
               <el-option v-for="server in servers" :key="server.id" :label="server.name" :value="server.id" />
             </el-select>

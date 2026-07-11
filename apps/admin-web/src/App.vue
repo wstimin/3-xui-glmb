@@ -8,31 +8,31 @@ type Branding = { brandName: string; logoDataUrl: string };
 
 const fallbackBrandName = '十夜管理后台';
 const navSections = [
-  { label: '总览', items: [{ to: '/', label: '概览', icon: LayoutDashboard }] },
+  { label: '总览看板', items: [{ to: '/', label: '数据概览', icon: LayoutDashboard }] },
   {
-    label: '业务',
+    label: '业务管理',
     items: [
       { to: '/customers', label: '用户管理', icon: Users },
       { to: '/nodes', label: '路由节点', icon: Router }
     ]
   },
   {
-    label: '网络',
+    label: '网络配置',
     items: [
-      { to: '/xui-servers', label: '连接服务器', icon: Network },
+      { to: '/xui-servers', label: '面板连接', icon: Network },
       { to: '/socks-nodes', label: '出站节点', icon: ShieldCheck },
       { to: '/sync-logs', label: '同步日志', icon: ClipboardList }
     ]
   },
   {
-    label: '资金',
+    label: '财务管理',
     items: [
       { to: '/finance', label: '财务记录', icon: WalletCards },
       { to: '/cards', label: '卡密管理', icon: CreditCard },
       { to: '/payments', label: '支付设置', icon: ReceiptText }
     ]
   },
-  { label: '系统', items: [{ to: '/settings', label: '系统设置', icon: Settings }] }
+  { label: '系统配置', items: [{ to: '/settings', label: '系统设置', icon: Settings }] }
 ];
 
 const checking = ref(true);
