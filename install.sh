@@ -427,9 +427,13 @@ cleanup_runtime_files() {
   cd "${APP_DIR}"
   log "Removing build-only source files from ${APP_DIR}"
 
-  rm -rf .git .github .vscode scripts infra apps/admin-web apps/user-web
+  rm -rf .git .github .vscode infra apps/admin-web apps/user-web
   rm -f README.md DEPLOY.md ARCHITECTURE.md UNINSTALL.md install.sh uninstall.sh docker-compose.yml .env.example tsconfig.base.json
   rm -f 1Panel部署教程.md 宝塔部署教程.md 部署教程.md
+
+  if [ -d scripts ]; then
+    find scripts -mindepth 1 -maxdepth 1 ! -name panel-start.mjs ! -name sync-admin.mjs -exec rm -rf {} +
+  fi
 
   if [ -d apps/api ]; then
     find apps/api -mindepth 1 -maxdepth 1 ! -name dist ! -name package.json -exec rm -rf {} +
@@ -837,6 +841,9 @@ configure_domain() {
     public_url="http://\${domain}"
   fi
   set_env_value PUBLIC_WEB_URL "\${public_url}"
+  saved_public_url="\$(get_env_value PUBLIC_WEB_URL || true)"
+  [ "\${saved_public_url}" = "\${public_url}" ] || die "PUBLIC_WEB_URL 写入后校验失败，当前值：\${saved_public_url:-未设置}"
+  sync_admin_account
   systemctl restart "\${APP_NAME}"
   echo "Domain access configured: \${public_url}/"
 }
@@ -851,6 +858,8 @@ remove_domain_access() {
   fi
   public_url="http://\$(detect_server_ip):\${PORT}"
   set_env_value PUBLIC_WEB_URL "\${public_url}"
+  saved_public_url="\$(get_env_value PUBLIC_WEB_URL || true)"
+  [ "\${saved_public_url}" = "\${public_url}" ] || die "PUBLIC_WEB_URL 写入后校验失败，当前值：\${saved_public_url:-未设置}"
   systemctl restart "\${APP_NAME}"
   echo "已切换为：\${public_url}/"
 }
@@ -872,6 +881,7 @@ run_migration() {
   log "执行数据库迁移"
   npm run prisma:generate
   npm run prisma:migrate
+  npm run admin:sync
   npm prune --omit=dev
   chown -R shiye:shiye "\${APP_DIR}" 2>/dev/null || true
   systemctl restart "\${APP_NAME}"
@@ -887,6 +897,24 @@ get_env_value() {
   key="\$1"
   [ -f "\${APP_DIR}/.env" ] || return 1
   grep -E "^\${key}=" "\${APP_DIR}/.env" | tail -n 1 | sed "s|^\${key}=||"
+}
+
+sync_admin_account() {
+  [ -d "\${APP_DIR}" ] || die "未找到安装目录：\${APP_DIR}"
+  [ -f "\${APP_DIR}/.env" ] || die "未找到 \${APP_DIR}/.env，请先安装项目。"
+  [ -f "\${APP_DIR}/scripts/sync-admin.mjs" ] || die "未找到管理员账号同步脚本，请先更新项目运行文件。"
+  cd "\${APP_DIR}"
+  log "同步管理员账号密码到数据库"
+  npm run admin:sync
+}
+
+detect_nginx_domain() {
+  for nginx_file in "/etc/nginx/conf.d/\${APP_NAME}.conf" "/etc/nginx/sites-enabled/\${APP_NAME}.conf" "/etc/nginx/sites-available/\${APP_NAME}.conf"; do
+    [ -f "\${nginx_file}" ] || continue
+    awk '/server_name[[:space:]]+/ { for (i = 2; i <= NF; i++) { gsub(/;/, "", \$i); if (\$i != "_") { print \$i; exit } } }' "\${nginx_file}"
+    return 0
+  done
+  return 1
 }
 
 show_secret_state() {
@@ -941,6 +969,7 @@ show_current_config() {
   admin_user="\$(get_env_value DEFAULT_ADMIN_USERNAME || true)"
   admin_password="\$(get_env_value DEFAULT_ADMIN_PASSWORD || true)"
   node_env="\$(get_env_value NODE_ENV || true)"
+  nginx_domain="\$(detect_nginx_domain || true)"
 
   configured_port="\${configured_port:-\${PORT}}"
   public_url="\${public_url:-http://\$(detect_server_ip):\${configured_port}}"
@@ -951,6 +980,7 @@ show_current_config() {
   echo "用户端地址：\${public_url}/"
   echo "管理端地址：\${public_url}\${admin_path}/"
   echo "健康检查：\${public_url}/api/health"
+  echo "Nginx 域名：\${nginx_domain:-未检测到}"
   echo
   echo "管理员账号：\${admin_user:-未设置}"
   echo "管理员密码：\${admin_password:-未设置}"

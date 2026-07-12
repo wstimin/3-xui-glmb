@@ -217,6 +217,9 @@ function startInstall() {
   state.endedAt = null;
   state.logs = [];
 
+  const usePrebuilt = shouldUsePrebuiltInstall();
+  if (usePrebuilt) appendLog('检测到预构建运行包，安装时跳过前后端构建。');
+
   const steps = [
     ['npm', ['ci']],
     ['npm', ['run', 'install:prod']],
@@ -249,7 +252,7 @@ async function runSteps(steps) {
 
 function runCommand(command, args) {
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(command, args, { cwd: root, shell: process.platform === 'win32' });
+    const child = spawn(command, args, { cwd: root, shell: process.platform === 'win32', env: commandEnv() });
     child.stdout.on('data', (chunk) => appendLog(chunk.toString()));
     child.stderr.on('data', (chunk) => appendLog(chunk.toString()));
     child.on('error', rejectPromise);
@@ -258,6 +261,19 @@ function runCommand(command, args) {
       else rejectPromise(new Error(`${command} ${args.join(' ')} exited with code ${code}`));
     });
   });
+}
+
+function shouldUsePrebuiltInstall() {
+  const runtimeReady = requiredFiles.every((file) => existsSync(resolve(root, file)));
+  const buildSourcesMissing = !existsSync(resolve(root, 'packages/shared/tsconfig.json')) || !existsSync(resolve(root, 'apps/admin-web/src'));
+  return process.env.SHIYE_PREBUILT === '1' || (runtimeReady && buildSourcesMissing);
+}
+
+function commandEnv() {
+  return {
+    ...process.env,
+    SHIYE_PREBUILT: shouldUsePrebuiltInstall() ? '1' : process.env.SHIYE_PREBUILT || ''
+  };
 }
 
 async function runApi() {
