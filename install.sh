@@ -251,10 +251,12 @@ escape_sed_replacement() {
 set_env_value() {
   key="$1"
   value="$2"
-  escaped_value="$(escape_sed_replacement "${value}")"
-  if grep -qE "^${key}=" .env; then
-    sed -i "s|^${key}=.*|${key}=${escaped_value}|" .env
+  tmp_file="$(mktemp)"
+  if [ -f .env ] && awk -v key="${key}" -v value="${value}" 'BEGIN { updated = 0; prefix = key "=" } index($0, prefix) == 1 { print prefix value; updated = 1; next } { print } END { if (!updated) print prefix value }' .env > "${tmp_file}"; then
+    cat "${tmp_file}" > .env
+    rm -f "${tmp_file}"
   else
+    rm -f "${tmp_file}"
     printf "\n%s=%s\n" "${key}" "${value}" >> .env
   fi
 }
@@ -705,10 +707,12 @@ set_env_value() {
   [ -f "\${APP_DIR}/.env" ] || die "未找到 \${APP_DIR}/.env，请先安装项目。"
   key="\$1"
   value="\$2"
-  escaped_value="\$(escape_sed_replacement "\${value}")"
-  if grep -qE "^\${key}=" "\${APP_DIR}/.env"; then
-    sed -i "s|^\${key}=.*|\${key}=\${escaped_value}|" "\${APP_DIR}/.env"
+  tmp_file="\$(mktemp)"
+  if awk -v key="\${key}" -v value="\${value}" 'BEGIN { updated = 0; prefix = key "=" } index(\$0, prefix) == 1 { print prefix value; updated = 1; next } { print } END { if (!updated) print prefix value }' "\${APP_DIR}/.env" > "\${tmp_file}"; then
+    cat "\${tmp_file}" > "\${APP_DIR}/.env"
+    rm -f "\${tmp_file}"
   else
+    rm -f "\${tmp_file}"
     printf "\n%s=%s\n" "\${key}" "\${value}" >> "\${APP_DIR}/.env"
   fi
 }
