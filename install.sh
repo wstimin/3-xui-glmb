@@ -403,7 +403,10 @@ install_dependencies_and_build() {
   else
     npm install
   fi
-  npm run install:prod
+  case "${INSTALL_SOURCE_USED:-}" in
+    prebuilt-package|local-prebuilt) SHIYE_PREBUILT=1 npm run install:prod ;;
+    *) npm run install:prod ;;
+  esac
   npm prune --omit=dev
 }
 

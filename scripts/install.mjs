@@ -1,14 +1,20 @@
 import { spawn } from 'node:child_process';
 
+const usingPrebuilt = process.env.SHIYE_PREBUILT === '1';
+
 const steps = [
   ['install:check', ['run', 'install:check']],
   ['prisma:generate', ['run', 'prisma:generate']],
   ['prisma:migrate', ['run', 'prisma:migrate']],
   ['db:seed', ['run', 'db:seed']],
-  ['build', ['run', 'build']],
-  ['typecheck', ['run', 'typecheck']],
+  ...(usingPrebuilt ? [] : [
+    ['build', ['run', 'build']],
+    ['typecheck', ['run', 'typecheck']]
+  ]),
   ['deploy:check', ['run', 'deploy:check']]
 ];
+
+if (usingPrebuilt) console.log('Using prebuilt runtime package; skipping build and typecheck.');
 
 for (const [name, args] of steps) {
   console.log(`\n==> ${name}`);
