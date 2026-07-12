@@ -432,7 +432,7 @@ cleanup_runtime_files() {
   rm -f 1Panel部署教程.md 宝塔部署教程.md 部署教程.md
 
   if [ -d scripts ]; then
-    find scripts -mindepth 1 -maxdepth 1 ! -name panel-start.mjs ! -name sync-admin.mjs -exec rm -rf {} +
+    find scripts -mindepth 1 -maxdepth 1 ! -name '*.mjs' -exec rm -rf {} +
   fi
 
   if [ -d apps/api ]; then
