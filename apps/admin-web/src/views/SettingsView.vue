@@ -170,9 +170,9 @@ onMounted(loadSettings);
 
     <div class="panel">
       <div class="panel-toolbar"><strong>账号安全</strong></div>
-      <el-form :model="passwordForm" label-width="88px">
-        <el-form-item label="当前密码"><el-input v-model="passwordForm.currentPassword" type="password" show-password /></el-form-item>
-        <el-form-item label="新密码"><el-input v-model="passwordForm.newPassword" type="password" show-password minlength="8" /></el-form-item>
+      <el-form :model="passwordForm" label-width="88px" autocomplete="off">
+        <el-form-item label="当前密码"><el-input v-model="passwordForm.currentPassword" name="shiye-current-passcode" type="password" show-password autocomplete="new-password" /></el-form-item>
+        <el-form-item label="新密码"><el-input v-model="passwordForm.newPassword" name="shiye-next-passcode" type="password" show-password autocomplete="new-password" minlength="8" /></el-form-item>
         <el-form-item><el-button type="primary" :loading="changingPassword" :disabled="!passwordForm.currentPassword || passwordForm.newPassword.length < 8" @click="changePassword">修改密码</el-button></el-form-item>
       </el-form>
     </div>

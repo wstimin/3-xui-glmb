@@ -140,7 +140,7 @@ onUnmounted(() => {
   <div v-if="checking" class="boot-screen">正在检查登录状态</div>
 
   <div v-else-if="!user" class="login-screen">
-    <form class="login-panel refined-login" @submit.prevent="login">
+    <form class="login-panel refined-login" autocomplete="off" @submit.prevent="login">
       <div class="login-brand-row">
         <div class="login-brand">
           <img v-if="branding.logoDataUrl" :src="branding.logoDataUrl" alt="Logo" />
@@ -154,11 +154,11 @@ onUnmounted(() => {
       <el-alert v-if="loginError" :title="loginError" type="error" show-icon :closable="false" />
       <label class="login-field">
         <UserRound :size="17" />
-        <input v-model="loginForm.username" placeholder="账号" autocomplete="username" />
+        <input v-model="loginForm.username" name="shiye-admin-account" placeholder="账号" autocomplete="off" />
       </label>
       <label class="login-field">
         <LockKeyhole :size="17" />
-        <input v-model="loginForm.password" type="password" placeholder="密码" autocomplete="current-password" />
+        <input v-model="loginForm.password" name="shiye-admin-passcode" type="password" placeholder="密码" autocomplete="new-password" />
       </label>
       <button class="login-submit" :disabled="loggingIn || !loginForm.username || !loginForm.password">
         <span>{{ loggingIn ? '登录中' : '登录' }}</span>

@@ -58,9 +58,9 @@ onMounted(loadProfile);
 
   <div class="panel profile-panel">
     <h2>修改密码</h2>
-    <form class="password-form" @submit.prevent="changePassword">
-      <input v-model="form.currentPassword" type="password" placeholder="当前密码" autocomplete="current-password" />
-      <input v-model="form.newPassword" type="password" placeholder="新密码，至少 8 位" autocomplete="new-password" />
+    <form class="password-form" autocomplete="off" @submit.prevent="changePassword">
+      <input v-model="form.currentPassword" name="shiye-user-current-passcode" type="password" placeholder="当前密码" autocomplete="new-password" />
+      <input v-model="form.newPassword" name="shiye-user-next-passcode" type="password" placeholder="新密码，至少 8 位" autocomplete="new-password" />
       <button :disabled="changing || !form.currentPassword || form.newPassword.length < 8">{{ changing ? '提交中' : '修改密码' }}</button>
     </form>
   </div>

@@ -17,6 +17,16 @@
   --shadow: 0 14px 34px rgb(88 28 135 / 8%);
 }
 body { margin: 0; font-family: Inter, "Microsoft YaHei", Arial, sans-serif; background: var(--app-bg); color: var(--text); }
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 1000px #fff inset !important;
+  box-shadow: 0 0 0 1000px #fff inset !important;
+  -webkit-text-fill-color: #111827 !important;
+  caret-color: #111827;
+  transition: background-color 9999s ease-out 0s;
+}
 .boot-screen, .login-screen { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
 .boot-screen { color: #64748b; }
 .login-screen { background: linear-gradient(180deg, #fbf8ff 0%, #f7f5fb 100%); }
