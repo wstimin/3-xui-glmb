@@ -1032,11 +1032,12 @@ export class XuiService {
     if (!customerNode) throw new NotFoundException('Customer node not found');
     const config = this.xuiObject(customerNode.config);
     const savedLinks = Array.isArray(config.links) ? config.links.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
-    if (savedLinks.length) return savedLinks;
+    if (savedLinks.length) return this.renameShareLinks(savedLinks, customerNode.serviceNode.name);
     const client = await this.createAuthenticatedClient(customerNode.serviceNode.server);
     const subId = typeof config.subId === 'string' ? config.subId : undefined;
     try {
-      return await this.linksForClient(client, customerNode.xuiEmail, subId);
+      const links = await this.linksForClient(client, customerNode.xuiEmail, subId);
+      return this.renameShareLinks(links, customerNode.serviceNode.name);
     } catch (error) {
       await this.writeSyncLog(customerNode.serviceNode.serverId, 'customer-node-links', 'failed', this.errorMessage(error), {
         customerId,
@@ -1471,6 +1472,42 @@ export class XuiService {
       if (Array.isArray(value)) return value.filter((item): item is string => this.isShareLink(item));
     }
     return [];
+  }
+
+  private renameShareLinks(links: string[], displayName: string) {
+    const name = displayName.trim();
+    if (!name) return links;
+    return links.map((link) => this.renameShareLink(link, name));
+  }
+
+  private renameShareLink(link: string, displayName: string) {
+    const value = link.trim();
+    if (/^vmess:\/\//i.test(value)) return this.renameVmessShareLink(value, displayName);
+    const hashIndex = value.indexOf('#');
+    const linkWithoutName = hashIndex >= 0 ? value.slice(0, hashIndex) : value;
+    return `${linkWithoutName}#${encodeURIComponent(displayName)}`;
+  }
+
+  private renameVmessShareLink(link: string, displayName: string) {
+    try {
+      const payload = link.slice('vmess://'.length);
+      const config = JSON.parse(Buffer.from(this.normalizeBase64(payload), 'base64').toString('utf8')) as Record<string, unknown>;
+      config.ps = displayName;
+      return `vmess://${Buffer.from(JSON.stringify(config), 'utf8').toString('base64')}`;
+    } catch {
+      return this.renameFragmentShareLink(link, displayName);
+    }
+  }
+
+  private renameFragmentShareLink(link: string, displayName: string) {
+    const hashIndex = link.indexOf('#');
+    const linkWithoutName = hashIndex >= 0 ? link.slice(0, hashIndex) : link;
+    return `${linkWithoutName}#${encodeURIComponent(displayName)}`;
+  }
+
+  private normalizeBase64(value: string) {
+    const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+    return normalized.padEnd(normalized.length + (4 - normalized.length % 4) % 4, '=');
   }
 
   private async findClient(client: XuiClient, lookup: ClientLookup, inbounds: unknown[]): Promise<ClientMatch> {
