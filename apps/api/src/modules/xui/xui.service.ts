@@ -1298,7 +1298,7 @@ export class XuiService {
           cipherSuites: '',
           rejectUnknownSni: false,
           certificates: [{ certificateFile: certFiles.certFile, keyFile: certFiles.keyFile, ocspStapling: 3600 }],
-          alpn: transport === 'hysteria' ? ['h3'] : ['h2', 'http/1.1']
+          alpn: this.defaultTlsAlpn(transport)
         }
       };
     }
@@ -1425,11 +1425,25 @@ export class XuiService {
     if (transport === 'hysteria' && settings.version === undefined) delete generatedBranch.version;
     if (transport === 'tcp' && settings.header === undefined) delete generatedBranch.header;
     for (const key of ['tcpSettings', 'kcpSettings', 'wsSettings', 'grpcSettings', 'httpupgradeSettings', 'xhttpSettings', 'hysteriaSettings']) delete next[key];
-    return {
+    const replaced = {
       ...next,
       ...generated,
       [branchKey]: { ...currentBranch, ...generatedBranch }
     };
+    if (String(replaced.security || '') === 'tls') {
+      replaced.tlsSettings = {
+        ...this.xuiObject(replaced.tlsSettings),
+        alpn: this.defaultTlsAlpn(transport)
+      };
+    }
+    return replaced;
+  }
+
+  private defaultTlsAlpn(transport: string) {
+    if (transport === 'hysteria') return ['h3'];
+    if (transport === 'grpc') return ['h2'];
+    if (['ws', 'httpupgrade'].includes(transport)) return ['http/1.1'];
+    return ['h2', 'http/1.1'];
   }
 
   private transportFromStreamSettings(streamSettings: Record<string, unknown>, fallback = 'tcp') {
