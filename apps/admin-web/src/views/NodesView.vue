@@ -1,13 +1,38 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Edit3, Gauge, Plus, RefreshCw, RotateCcw, Search, Trash2, UploadCloud } from 'lucide-vue-next';
 import { api } from '../api';
 
 type XuiServer = { id: string; name: string; baseUrl: string; enabled: boolean };
 type SocksNode = { id: string; name: string; host: string; port: number; enabled: boolean };
+type ServiceNodeTransport = 'tcp' | 'kcp' | 'ws' | 'grpc' | 'httpupgrade' | 'xhttp' | 'hysteria';
+type ServiceNodeTransportSettings = {
+  version?: number;
+  acceptProxyProtocol?: boolean;
+  path?: string;
+  host?: string;
+  headers?: Record<string, string>;
+  heartbeatPeriod?: number;
+  serviceName?: string;
+  authority?: string;
+  multiMode?: boolean;
+  mtu?: number;
+  tti?: number;
+  uplinkCapacity?: number;
+  downlinkCapacity?: number;
+  cwndMultiplier?: number;
+  maxSendingWindow?: number;
+  mode?: 'auto' | 'packet-up' | 'stream-up' | 'stream-one';
+  xPaddingBytes?: string;
+  scMaxBufferedPosts?: number;
+  scStreamUpServerSecs?: string;
+  udpIdleTimeout?: number;
+};
 type ServiceNodeConfig = {
   encryption?: string;
+  transport?: ServiceNodeTransport;
+  transportSettings?: ServiceNodeTransportSettings;
   socksRelayEnabled?: boolean;
   socksNodeId?: string | null;
   remoteMode?: 'create' | 'bind';
@@ -77,6 +102,20 @@ const encryptionOptions = [
   { label: 'TLS', value: 'tls' },
   { label: 'Reality', value: 'reality' }
 ];
+const transportOptions = [
+  { label: 'RAW / TCP', value: 'tcp' },
+  { label: 'mKCP', value: 'kcp' },
+  { label: 'WebSocket', value: 'ws' },
+  { label: 'gRPC', value: 'grpc' },
+  { label: 'HTTPUpgrade', value: 'httpupgrade' },
+  { label: 'XHTTP', value: 'xhttp' }
+];
+const xhttpModeOptions = [
+  { label: 'auto', value: 'auto' },
+  { label: 'packet-up', value: 'packet-up' },
+  { label: 'stream-up', value: 'stream-up' },
+  { label: 'stream-one', value: 'stream-one' }
+];
 
 const servers = ref<XuiServer[]>([]);
 const socksNodes = ref<SocksNode[]>([]);
@@ -99,6 +138,8 @@ const form = reactive({
   inboundPort: undefined as number | undefined,
   protocol: 'vless',
   encryption: 'none',
+  transport: 'tcp' as ServiceNodeTransport,
+  transportSettings: defaultTransportSettings(),
   priceMonthly: 0,
   trafficLimitGb: 0,
   enabled: true,
@@ -112,6 +153,14 @@ const enabledNodeCount = computed(() => nodes.value.filter((item) => item.enable
 const remoteManagedNodeCount = computed(() => nodes.value.filter((item) => item.config?.remoteManaged).length);
 const socksRelayNodeCount = computed(() => nodes.value.filter((item) => item.config?.socksRelayEnabled).length);
 const inboundReadyNodeCount = computed(() => nodes.value.filter((item) => item.inboundId).length);
+const availableEncryptionOptions = computed(() => {
+  if (form.protocol === 'hysteria') return encryptionOptions.filter((item) => item.value === 'tls');
+  if (form.transport === 'kcp') return encryptionOptions.filter((item) => item.value === 'none');
+  return encryptionOptions.filter((item) => {
+    if (item.value !== 'reality') return true;
+    return ['vless', 'trojan'].includes(form.protocol) && ['tcp', 'grpc', 'xhttp'].includes(form.transport);
+  });
+});
 const filteredNodes = computed(() => {
   const keyword = searchQuery.value.trim().toLowerCase();
   if (!keyword) return nodes.value;
@@ -143,7 +192,10 @@ async function saveNode() {
   error.value = '';
   try {
     const path = editingId.value ? `/api/admin/service-nodes/${editingId.value}` : '/api/admin/service-nodes';
-    await api(path, { method: editingId.value ? 'PATCH' : 'POST', body: form });
+    await api(path, {
+      method: editingId.value ? 'PATCH' : 'POST',
+      body: { ...form, transportSettings: transportSettingsForSubmit() }
+    });
     ElMessage.success(editingId.value ? '路由节点已更新' : '路由节点已添加');
     dialogVisible.value = false;
     resetForm();
@@ -225,6 +277,8 @@ function editNode(node: ServiceNode) {
     inboundPort: config.remoteInboundPort ?? undefined,
     protocol: node.protocol || 'vless',
     encryption: config.encryption || 'none',
+    transport: node.protocol === 'hysteria' ? 'hysteria' : config.transport || 'tcp',
+    transportSettings: { ...defaultTransportSettings(), ...config.transportSettings },
     priceMonthly: Number(node.priceMonthly),
     trafficLimitGb: Number(node.trafficLimitGb),
     enabled: node.enabled,
@@ -320,6 +374,8 @@ function resetForm() {
     inboundPort: undefined,
     protocol: 'vless',
     encryption: 'none',
+    transport: 'tcp',
+    transportSettings: defaultTransportSettings(),
     priceMonthly: 0,
     trafficLimitGb: 0,
     enabled: true,
@@ -338,12 +394,85 @@ function remoteModeLabel(node: ServiceNode) {
   return node.config?.remoteManaged ? '自动创建' : '绑定已有';
 }
 
+function defaultTransportSettings(): ServiceNodeTransportSettings {
+  return {
+    acceptProxyProtocol: false,
+    path: '/',
+    host: '',
+    headers: {},
+    heartbeatPeriod: 0,
+    serviceName: '',
+    authority: '',
+    multiMode: false,
+    mtu: 1350,
+    tti: 20,
+    uplinkCapacity: 5,
+    downlinkCapacity: 20,
+    cwndMultiplier: 1,
+    maxSendingWindow: 2097152,
+    mode: 'auto',
+    xPaddingBytes: '100-1000',
+    scMaxBufferedPosts: 30,
+    scStreamUpServerSecs: '20-80',
+    udpIdleTimeout: 60
+  };
+}
+
+function transportSettingsForSubmit(): ServiceNodeTransportSettings {
+  const settings = form.transportSettings;
+  if (form.protocol === 'hysteria') return settings.udpIdleTimeout === 60 ? {} : { version: 2, udpIdleTimeout: settings.udpIdleTimeout };
+  if (form.transport === 'tcp') return settings.acceptProxyProtocol ? { acceptProxyProtocol: true } : {};
+  if (form.transport === 'kcp') return {
+    ...(settings.mtu === 1350 ? {} : { mtu: settings.mtu }),
+    ...(settings.tti === 20 ? {} : { tti: settings.tti }),
+    ...(settings.uplinkCapacity === 5 ? {} : { uplinkCapacity: settings.uplinkCapacity }),
+    ...(settings.downlinkCapacity === 20 ? {} : { downlinkCapacity: settings.downlinkCapacity }),
+    ...(settings.cwndMultiplier === 1 ? {} : { cwndMultiplier: settings.cwndMultiplier }),
+    ...(settings.maxSendingWindow === 2097152 ? {} : { maxSendingWindow: settings.maxSendingWindow })
+  };
+  if (form.transport === 'ws') return {
+    ...(settings.path === '/' ? {} : { path: settings.path }),
+    ...(settings.host ? { host: settings.host } : {}),
+    ...(settings.headers && Object.keys(settings.headers).length ? { headers: settings.headers } : {}),
+    ...(settings.heartbeatPeriod ? { heartbeatPeriod: settings.heartbeatPeriod } : {}),
+    ...(settings.acceptProxyProtocol ? { acceptProxyProtocol: true } : {})
+  };
+  if (form.transport === 'grpc') return {
+    ...(settings.serviceName ? { serviceName: settings.serviceName } : {}),
+    ...(settings.authority ? { authority: settings.authority } : {}),
+    ...(settings.multiMode ? { multiMode: true } : {})
+  };
+  if (form.transport === 'httpupgrade') return {
+    ...(settings.path === '/' ? {} : { path: settings.path }),
+    ...(settings.host ? { host: settings.host } : {}),
+    ...(settings.headers && Object.keys(settings.headers).length ? { headers: settings.headers } : {}),
+    ...(settings.acceptProxyProtocol ? { acceptProxyProtocol: true } : {})
+  };
+  return {
+    ...(settings.path === '/' ? {} : { path: settings.path }),
+    ...(settings.host ? { host: settings.host } : {}),
+    ...(settings.headers && Object.keys(settings.headers).length ? { headers: settings.headers } : {}),
+    ...(settings.mode === 'auto' ? {} : { mode: settings.mode }),
+    ...(settings.xPaddingBytes === '100-1000' ? {} : { xPaddingBytes: settings.xPaddingBytes }),
+    ...(settings.scMaxBufferedPosts === 30 ? {} : { scMaxBufferedPosts: settings.scMaxBufferedPosts }),
+    ...(settings.scStreamUpServerSecs === '20-80' ? {} : { scStreamUpServerSecs: settings.scStreamUpServerSecs })
+  };
+}
+
+function transportLabel(node: ServiceNode) {
+  const transport = node.protocol === 'hysteria' ? 'hysteria' : node.config?.transport || 'tcp';
+  return transport === 'hysteria'
+    ? 'Hysteria'
+    : transportOptions.find((item) => item.value === transport)?.label || transport;
+}
+
 function nodeSearchText(node: ServiceNode) {
   return [
     node.name,
     node.server?.name,
     node.protocol,
     node.config?.encryption,
+    transportLabel(node),
     node.config?.remoteManaged ? '自动创建' : '绑定已有',
     node.inboundId,
     node.priceMonthly,
@@ -352,6 +481,16 @@ function nodeSearchText(node: ServiceNode) {
     socksLabel(node.config?.socksNodeId)
   ].filter(Boolean).join(' ').toLowerCase();
 }
+
+watch(() => [form.protocol, form.transport] as const, () => {
+  if (form.protocol === 'hysteria') {
+    form.transport = 'hysteria';
+    form.encryption = 'tls';
+    return;
+  }
+  if (form.transport === 'hysteria') form.transport = 'tcp';
+  if (!availableEncryptionOptions.value.some((item) => item.value === form.encryption)) form.encryption = 'none';
+});
 
 onMounted(loadNodes);
 </script>
@@ -383,7 +522,7 @@ onMounted(loadNodes);
       </div>
     </div>
     <div class="filter-bar">
-      <el-input v-model="searchQuery" clearable placeholder="搜索节点、面板连接、入站 ID、协议、安全类型" style="max-width: 380px">
+      <el-input v-model="searchQuery" clearable placeholder="搜索节点、面板连接、入站 ID、协议、传输类型" style="max-width: 380px">
         <template #prefix><Search :size="15" /></template>
       </el-input>
       <span class="filter-summary">显示 {{ filteredNodes.length }} / {{ nodes.length }}</span>
@@ -402,7 +541,8 @@ onMounted(loadNodes);
         </div>
         <div class="entity-card-stats">
           <div><span>协议</span><strong>{{ node.protocol }}</strong></div>
-          <div><span>安全</span><strong>{{ node.config?.encryption || 'none' }}</strong></div>
+          <div><span>传输</span><strong>{{ transportLabel(node) }}</strong></div>
+          <div><span>安全</span><strong>{{ node.protocol === 'hysteria' ? 'tls' : node.config?.encryption || 'none' }}</strong></div>
           <div><span>月价格</span><strong>{{ node.priceMonthly }}</strong></div>
           <div><span>流量</span><strong>{{ node.trafficLimitGb }} GB</strong></div>
         </div>
@@ -457,18 +597,73 @@ onMounted(loadNodes);
       </section>
 
       <section class="dialog-form-section">
-        <div class="dialog-section-head"><strong>节点协议</strong><span>选择节点类型和 TLS/Reality 等传输安全</span></div>
+        <div class="dialog-section-head"><strong>协议与传输</strong><span>传输方式和安全组合按 3x-ui 3.5.0 规则提供</span></div>
         <div class="dialog-form-grid">
           <el-form-item label="节点类型">
             <el-select v-model="form.protocol" style="width: 100%">
               <el-option v-for="item in protocolOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
-          <el-form-item label="传输安全">
-            <el-select v-model="form.encryption" style="width: 100%">
-              <el-option v-for="item in encryptionOptions" :key="item.value" :label="item.label" :value="item.value" />
+          <el-form-item label="传输类型">
+            <el-input v-if="form.protocol === 'hysteria'" model-value="Hysteria（固定）" disabled />
+            <el-select v-else v-model="form.transport" style="width: 100%">
+              <el-option v-for="item in transportOptions" :key="item.value" :label="item.label" :value="item.value" />
             </el-select>
           </el-form-item>
+          <el-form-item label="传输安全">
+            <el-select v-model="form.encryption" :disabled="form.protocol === 'hysteria'" style="width: 100%">
+              <el-option v-for="item in availableEncryptionOptions" :key="item.value" :label="item.label" :value="item.value" />
+            </el-select>
+          </el-form-item>
+        </div>
+      </section>
+
+      <section class="dialog-form-section">
+        <div class="dialog-section-head"><strong>传输参数</strong><span>仅显示当前传输在 3x-ui 3.5.0 文档中的常用设置</span></div>
+        <div class="dialog-form-grid">
+          <template v-if="form.protocol === 'hysteria'">
+            <el-form-item label="协议版本"><el-input model-value="2" disabled /></el-form-item>
+            <el-form-item label="UDP 空闲秒数"><el-input-number v-model="form.transportSettings.udpIdleTimeout" :min="2" :max="600" style="width: 100%" /></el-form-item>
+          </template>
+          <template v-else-if="form.transport === 'tcp'">
+            <el-form-item label="PROXY 协议"><el-switch v-model="form.transportSettings.acceptProxyProtocol" /></el-form-item>
+          </template>
+          <template v-else-if="form.transport === 'kcp'">
+            <el-form-item label="MTU"><el-input-number v-model="form.transportSettings.mtu" :min="576" :max="1460" style="width: 100%" /></el-form-item>
+            <el-form-item label="TTI 毫秒"><el-input-number v-model="form.transportSettings.tti" :min="10" :max="100" style="width: 100%" /></el-form-item>
+            <el-form-item label="上行 MB/s"><el-input-number v-model="form.transportSettings.uplinkCapacity" :min="0" style="width: 100%" /></el-form-item>
+            <el-form-item label="下行 MB/s"><el-input-number v-model="form.transportSettings.downlinkCapacity" :min="0" style="width: 100%" /></el-form-item>
+            <el-form-item label="拥塞窗口倍数"><el-input-number v-model="form.transportSettings.cwndMultiplier" :min="1" style="width: 100%" /></el-form-item>
+            <el-form-item label="最大发送窗口"><el-input-number v-model="form.transportSettings.maxSendingWindow" :min="0" style="width: 100%" /></el-form-item>
+          </template>
+          <template v-else-if="form.transport === 'ws'">
+            <el-form-item label="路径"><el-input v-model="form.transportSettings.path" placeholder="/" /></el-form-item>
+            <el-form-item label="Host"><el-input v-model="form.transportSettings.host" /></el-form-item>
+            <el-form-item label="心跳秒数"><el-input-number v-model="form.transportSettings.heartbeatPeriod" :min="0" style="width: 100%" /></el-form-item>
+            <el-form-item label="PROXY 协议"><el-switch v-model="form.transportSettings.acceptProxyProtocol" /></el-form-item>
+          </template>
+          <template v-else-if="form.transport === 'grpc'">
+            <el-form-item label="服务名称"><el-input v-model="form.transportSettings.serviceName" /></el-form-item>
+            <el-form-item label="Authority"><el-input v-model="form.transportSettings.authority" /></el-form-item>
+            <el-form-item label="多流模式"><el-switch v-model="form.transportSettings.multiMode" /></el-form-item>
+          </template>
+          <template v-else-if="form.transport === 'httpupgrade'">
+            <el-form-item label="路径"><el-input v-model="form.transportSettings.path" placeholder="/" /></el-form-item>
+            <el-form-item label="Host"><el-input v-model="form.transportSettings.host" /></el-form-item>
+            <el-form-item label="PROXY 协议"><el-switch v-model="form.transportSettings.acceptProxyProtocol" /></el-form-item>
+          </template>
+          <template v-else-if="form.transport === 'xhttp'">
+            <el-form-item label="路径"><el-input v-model="form.transportSettings.path" placeholder="/" /></el-form-item>
+            <el-form-item label="Host"><el-input v-model="form.transportSettings.host" /></el-form-item>
+            <el-form-item label="模式">
+              <el-select v-model="form.transportSettings.mode" style="width: 100%">
+                <el-option v-for="item in xhttpModeOptions" :key="item.value" :label="item.label" :value="item.value" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="填充范围"><el-input v-model="form.transportSettings.xPaddingBytes" /></el-form-item>
+            <el-form-item label="缓冲 POST 数"><el-input-number v-model="form.transportSettings.scMaxBufferedPosts" :min="0" style="width: 100%" /></el-form-item>
+            <el-form-item label="上传窗口秒"><el-input v-model="form.transportSettings.scStreamUpServerSecs" /></el-form-item>
+          </template>
         </div>
       </section>
 

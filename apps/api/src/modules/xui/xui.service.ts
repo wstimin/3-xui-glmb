@@ -35,6 +35,8 @@ type SyncLogQuery = {
 
 type ServiceNodeConfig = {
   encryption?: string;
+  transport?: string;
+  transportSettings?: Record<string, unknown>;
   socksRelayEnabled?: boolean;
   socksNodeId?: string | null;
   remoteSocksOutboundTag?: string;
@@ -54,6 +56,8 @@ type CreateServiceInboundInput = {
   name: string;
   protocol: string;
   encryption?: string;
+  transport?: string;
+  transportSettings?: Record<string, unknown>;
   enabled: boolean;
   port?: number;
   remark?: string | null;
@@ -62,6 +66,8 @@ type CreateServiceInboundInput = {
 
 type UpdateServiceInboundInput = CreateServiceInboundInput & {
   inboundId: number;
+  remoteClientEmail?: string;
+  remoteClientSubId?: string;
 };
 
 type ClientLookup = {
@@ -302,7 +308,13 @@ export class XuiService {
 
     const tag = this.serviceInboundTag();
     const serverConfig = { ...this.xuiObject(server.config), baseUrl: server.baseUrl };
-    const streamSettings = await this.defaultStreamSettings(client, input.encryption || 'none', serverConfig);
+    const streamSettings = await this.defaultStreamSettings(
+      client,
+      input.encryption || 'none',
+      input.transport || 'tcp',
+      input.transportSettings || {},
+      serverConfig
+    );
     const payload = this.buildInboundPayload({ ...input, port, tag, streamSettings });
     const response = await client.addInbound(payload);
     this.assertXuiSuccess(response);
@@ -323,13 +335,14 @@ export class XuiService {
     const remoteClientSubId = this.subscriptionId(remoteClientUuid);
     const remoteClientEmail = this.serviceClientEmail(input.name, inboundId);
     const remoteClient = this.buildXuiClient({
+      protocol: input.protocol,
       uuid: remoteClientUuid,
       subId: remoteClientSubId,
       email: remoteClientEmail,
       enabled: input.enabled,
       expireAt: null,
       trafficLimitGb: input.trafficLimitGb ?? 0,
-      flow: this.clientFlowForProtocol(input.protocol, input.encryption || 'none')
+      flow: this.clientFlowForProtocol(input.protocol, input.encryption || 'none', input.transport || 'tcp')
     });
     let clientResponse: unknown;
     try {
@@ -361,6 +374,7 @@ export class XuiService {
       inboundId,
       port,
       protocol: input.protocol,
+      transport: input.transport || 'tcp',
       tag,
       reality: this.realityLogDetail(streamSettings),
       remoteClientEmail,
@@ -398,11 +412,17 @@ export class XuiService {
 
     const serverConfig = { ...this.xuiObject(server.config), baseUrl: server.baseUrl };
     const currentStreamSettings = this.xuiObject(this.parseMaybeJson(currentInbound.streamSettings));
-    const currentSecurity = String(currentStreamSettings.security || 'none').trim() || 'none';
+    const currentSecurity = currentInbound.protocol === 'hysteria'
+      ? 'tls'
+      : String(currentStreamSettings.security || 'none').trim() || 'none';
+    const currentTransport = this.transportFromStreamSettings(currentStreamSettings);
     const nextSecurity = input.encryption || 'none';
+    const nextTransport = input.transport || 'tcp';
     const streamSettings = currentSecurity === nextSecurity
-      ? currentStreamSettings
-      : await this.defaultStreamSettings(client, nextSecurity, serverConfig);
+      && String(currentInbound.protocol || '') === input.protocol
+      && (nextTransport !== 'hysteria' || currentTransport === 'hysteria')
+      ? this.replaceTransportSettings(currentStreamSettings, nextTransport, input.transportSettings || {})
+      : await this.defaultStreamSettings(client, nextSecurity, nextTransport, input.transportSettings || {}, serverConfig);
     const currentSettings = this.xuiObject(this.parseMaybeJson(currentInbound.settings));
     const port = input.port || this.positiveInteger(currentInbound.port);
     if (!port) throw new BadRequestException('3x-ui inbound is missing a valid port');
@@ -430,14 +450,20 @@ export class XuiService {
 
     const response = await client.updateInbound(input.inboundId, payload);
     this.assertXuiSuccess(response);
+    const links = input.remoteClientEmail || input.remoteClientSubId
+      ? await this.linksForClient(client, input.remoteClientEmail || '', input.remoteClientSubId).catch(() => [] as string[])
+      : [];
     await this.writeSyncLog(server.id, 'service-node-inbound-update', 'success', `Updated inbound ${input.inboundId} for ${input.name}`, {
       inboundId: input.inboundId,
       port,
       protocol: input.protocol,
+      previousTransport: currentTransport,
+      transport: nextTransport,
       reality: this.realityLogDetail(streamSettings),
+      links,
       response: this.toJsonValue(response)
     });
-    return { updated: true, inboundId: input.inboundId, port, response };
+    return { updated: true, inboundId: input.inboundId, port, links, response };
   }
 
   async setServiceNodeRemoteEnable(serviceNodeId: string, enable: boolean) {
@@ -486,6 +512,7 @@ export class XuiService {
           const subId = existing.subId || remoteClientSubId || this.subscriptionId(uuid);
           const email = existing.email || remoteClientEmail || this.serviceClientEmail(serviceNode.name, serviceNode.inboundId);
           const payload = await this.updateClientPreservingRemote(client, existing.email || email, this.buildXuiClient({
+              protocol: serviceNode.protocol,
               uuid,
               subId,
               email,
@@ -671,7 +698,7 @@ export class XuiService {
         }
 
         const inbound = this.xuiObject(rawInbound);
-        const streamSettings = this.xuiObject(inbound.streamSettings);
+        const streamSettings = this.xuiObject(this.parseMaybeJson(inbound.streamSettings));
         const remoteClient = this.firstInboundClientIdentity(inbound);
         const name = this.remoteInboundName(inbound, inboundId);
         const protocol = String(inbound.protocol || 'vless').trim() || 'vless';
@@ -709,7 +736,13 @@ export class XuiService {
           remoteClientEmail: remoteClient.email || previousConfig.remoteClientEmail || undefined,
           remoteClientUuid: remoteClient.uuid || previousConfig.remoteClientUuid || undefined,
           remoteClientSubId: remoteClient.subId || previousConfig.remoteClientSubId || undefined,
-          encryption: String(streamSettings.security || previousConfig.encryption || 'none'),
+          encryption: protocol === 'hysteria' ? 'tls' : String(streamSettings.security || previousConfig.encryption || 'none'),
+          transport: protocol === 'hysteria'
+            ? 'hysteria'
+            : this.transportFromStreamSettings(streamSettings, String(previousConfig.transport || 'tcp')),
+          transportSettings: protocol === 'hysteria'
+            ? this.hysteriaTransportConfig(streamSettings, previousConfig.transportSettings)
+            : this.transportConfigFromStreamSettings(streamSettings, previousConfig.transportSettings),
           importedFromRemote: existing ? Boolean(previousConfig.importedFromRemote) : true
         };
 
@@ -970,6 +1003,7 @@ export class XuiService {
       const subId = existing.subId || remoteClientSubId || savedSubId || this.subscriptionId(uuid);
       const xuiEmail = existing.email || remoteClientEmail || customerNode.xuiEmail;
       const xuiClient = this.buildXuiClient({
+        protocol: customerNode.serviceNode.protocol,
         uuid,
         subId,
         email: xuiEmail,
@@ -1126,19 +1160,25 @@ export class XuiService {
     return Boolean(config.subId || (Array.isArray(config.links) && config.links.length));
   }
 
-  private buildXuiClient(input: { uuid: string; subId: string; email: string; enabled: boolean; expireAt?: Date | null; trafficLimitGb: Prisma.Decimal | number | string | null; flow?: string }) {
-    return {
-      id: input.uuid,
-      uuid: input.uuid,
+  private buildXuiClient(input: { protocol: string; uuid: string; subId: string; email: string; enabled: boolean; expireAt?: Date | null; trafficLimitGb: Prisma.Decimal | number | string | null; flow?: string }) {
+    const common = {
       email: input.email,
       enable: input.enabled,
       expiryTime: input.expireAt ? input.expireAt.getTime() : 0,
       totalGB: this.gbToBytes(input.trafficLimitGb),
       limitIp: 0,
-      flow: input.flow || '',
       tgId: 0,
       subId: input.subId,
       reset: 0
+    };
+    if (input.protocol === 'hysteria') {
+      return { auth: input.uuid, ...common };
+    }
+    return {
+      id: input.uuid,
+      uuid: input.uuid,
+      flow: input.flow || '',
+      ...common
     };
   }
 
@@ -1169,11 +1209,13 @@ export class XuiService {
 
   private clientFlowForServiceNode(serviceNode: { protocol: string; config?: Prisma.JsonValue | null }) {
     const config = this.xuiObject(serviceNode.config);
-    return this.clientFlowForProtocol(serviceNode.protocol, String(config.encryption || 'none'));
+    return this.clientFlowForProtocol(serviceNode.protocol, String(config.encryption || 'none'), String(config.transport || 'tcp'));
   }
 
-  private clientFlowForProtocol(protocol: string, encryption: string) {
-    return protocol === 'vless' && encryption === 'reality' ? 'xtls-rprx-vision' : '';
+  private clientFlowForProtocol(protocol: string, encryption: string, transport: string) {
+    return protocol === 'vless' && transport === 'tcp' && (encryption === 'tls' || encryption === 'reality')
+      ? 'xtls-rprx-vision'
+      : '';
   }
 
   private buildInboundPayload(input: CreateServiceInboundInput & { port: number; tag: string; streamSettings: Record<string, unknown> }) {
@@ -1214,6 +1256,7 @@ export class XuiService {
         clients: []
       };
     }
+    if (protocol === 'hysteria') return { version: 2, clients: [] };
     if (protocol === 'socks') return { auth: 'noauth', accounts: [], udp: true, ip: '127.0.0.1' };
     if (protocol === 'http') return { accounts: [] };
     if (protocol === 'mixed') return { auth: 'noauth', accounts: [], udp: true, ip: '127.0.0.1' };
@@ -1230,11 +1273,14 @@ export class XuiService {
     return next;
   }
 
-  private async defaultStreamSettings(client: XuiClient, security: string, serverConfig: Record<string, unknown> = {}) {
-    const base: Record<string, unknown> = {
-      network: 'tcp',
-      tcpSettings: { acceptProxyProtocol: false, header: { type: 'none' } }
-    };
+  private async defaultStreamSettings(
+    client: XuiClient,
+    security: string,
+    transport: string,
+    transportSettings: Record<string, unknown>,
+    serverConfig: Record<string, unknown> = {}
+  ) {
+    const base = this.defaultTransportSettings(transport, transportSettings);
     if (security === 'tls') {
       const certFiles = await this.resolveTlsCertFiles(client, serverConfig);
       const serverName = String(serverConfig.tlsServerName || '').trim();
@@ -1248,7 +1294,7 @@ export class XuiService {
           cipherSuites: '',
           rejectUnknownSni: false,
           certificates: [{ certificateFile: certFiles.certFile, keyFile: certFiles.keyFile, ocspStapling: 3600 }],
-          alpn: ['h2', 'http/1.1']
+          alpn: transport === 'hysteria' ? ['h3'] : ['h2', 'http/1.1']
         }
       };
     }
@@ -1284,6 +1330,139 @@ export class XuiService {
       };
     }
     return { ...base, security: 'none' };
+  }
+
+  private defaultTransportSettings(transport: string, settings: Record<string, unknown> = {}): Record<string, unknown> {
+    if (transport === 'hysteria') {
+      return {
+        network: 'hysteria',
+        hysteriaSettings: {
+          version: 2,
+          udpIdleTimeout: this.numberValue(settings.udpIdleTimeout, 60)
+        }
+      };
+    }
+    if (transport === 'kcp') {
+      return {
+        network: 'kcp',
+        kcpSettings: {
+          mtu: this.numberValue(settings.mtu, 1350),
+          tti: this.numberValue(settings.tti, 20),
+          uplinkCapacity: this.numberValue(settings.uplinkCapacity, 5),
+          downlinkCapacity: this.numberValue(settings.downlinkCapacity, 20),
+          cwndMultiplier: this.numberValue(settings.cwndMultiplier, 1),
+          maxSendingWindow: this.numberValue(settings.maxSendingWindow, 2097152)
+        }
+      };
+    }
+    if (transport === 'ws') {
+      return {
+        network: 'ws',
+        wsSettings: {
+          acceptProxyProtocol: this.booleanValue(settings.acceptProxyProtocol, false),
+          path: this.pathValue(settings.path),
+          host: this.stringValue(settings.host) || '',
+          headers: this.stringRecord(settings.headers),
+          heartbeatPeriod: this.numberValue(settings.heartbeatPeriod, 0)
+        }
+      };
+    }
+    if (transport === 'grpc') {
+      return {
+        network: 'grpc',
+        grpcSettings: {
+          serviceName: this.stringValue(settings.serviceName) || '',
+          authority: this.stringValue(settings.authority) || '',
+          multiMode: this.booleanValue(settings.multiMode, false)
+        }
+      };
+    }
+    if (transport === 'httpupgrade') {
+      return {
+        network: 'httpupgrade',
+        httpupgradeSettings: {
+          acceptProxyProtocol: this.booleanValue(settings.acceptProxyProtocol, false),
+          path: this.pathValue(settings.path),
+          host: this.stringValue(settings.host) || '',
+          headers: this.stringRecord(settings.headers)
+        }
+      };
+    }
+    if (transport === 'xhttp') {
+      return {
+        network: 'xhttp',
+        xhttpSettings: {
+          path: this.pathValue(settings.path),
+          host: this.stringValue(settings.host) || '',
+          mode: ['auto', 'packet-up', 'stream-up', 'stream-one'].includes(String(settings.mode)) ? settings.mode : 'auto',
+          xPaddingBytes: this.stringValue(settings.xPaddingBytes) || '100-1000',
+          scMaxBufferedPosts: this.numberValue(settings.scMaxBufferedPosts, 30),
+          scStreamUpServerSecs: this.stringValue(settings.scStreamUpServerSecs) || '20-80',
+          headers: this.stringRecord(settings.headers)
+        }
+      };
+    }
+    return {
+      network: 'tcp',
+      tcpSettings: {
+        acceptProxyProtocol: this.booleanValue(settings.acceptProxyProtocol, false),
+        header: { type: 'none' }
+      }
+    };
+  }
+
+  private replaceTransportSettings(current: Record<string, unknown>, transport: string, settings: Record<string, unknown>) {
+    const next = { ...current };
+    const currentTransport = this.transportFromStreamSettings(current);
+    const branchKey = `${transport}Settings`;
+    const currentBranch = currentTransport === transport ? this.xuiObject(current[branchKey]) : {};
+    const generated = this.defaultTransportSettings(transport, settings);
+    const generatedBranch = this.xuiObject(generated[branchKey]);
+    if (transport === 'hysteria' && settings.version === undefined) delete generatedBranch.version;
+    if (transport === 'tcp' && settings.header === undefined) delete generatedBranch.header;
+    for (const key of ['tcpSettings', 'kcpSettings', 'wsSettings', 'grpcSettings', 'httpupgradeSettings', 'xhttpSettings', 'hysteriaSettings']) delete next[key];
+    return {
+      ...next,
+      ...generated,
+      [branchKey]: { ...currentBranch, ...generatedBranch }
+    };
+  }
+
+  private transportFromStreamSettings(streamSettings: Record<string, unknown>, fallback = 'tcp') {
+    const transport = String(streamSettings.method || streamSettings.network || '').trim();
+    return ['tcp', 'kcp', 'ws', 'grpc', 'httpupgrade', 'xhttp', 'hysteria'].includes(transport) ? transport : fallback;
+  }
+
+  private transportConfigFromStreamSettings(streamSettings: Record<string, unknown>, fallback?: unknown) {
+    const transport = this.transportFromStreamSettings(streamSettings);
+    const key = `${transport}Settings`;
+    const settings = this.xuiObject(streamSettings[key]);
+    return Object.keys(settings).length ? settings : this.xuiObject(fallback);
+  }
+
+  private hysteriaTransportConfig(streamSettings: Record<string, unknown>, fallback?: unknown) {
+    const settings = this.xuiObject(streamSettings.hysteriaSettings);
+    if (Object.keys(settings).length) return settings;
+    const previous = this.xuiObject(fallback);
+    return {
+      version: 2,
+      udpIdleTimeout: this.numberValue(previous.udpIdleTimeout, 60)
+    };
+  }
+
+  private pathValue(value: unknown) {
+    const path = this.stringValue(value) || '/';
+    return path.startsWith('/') ? path : `/${path}`;
+  }
+
+  private numberValue(value: unknown, fallback: number) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  }
+
+  private stringRecord(value: unknown) {
+    const source = this.xuiObject(value);
+    return Object.fromEntries(Object.entries(source).filter((entry): entry is [string, string] => typeof entry[1] === 'string'));
   }
 
   private async resolveWebCertFiles(client: XuiClient) {
@@ -1930,7 +2109,7 @@ export class XuiService {
 
   private clientUuidOf(item: unknown) {
     const object = this.xuiObject(item);
-    return String(object.id || object.uuid || object.password || '').trim();
+    return String(object.id || object.uuid || object.password || object.auth || '').trim();
   }
 
   private clientSubIdOf(item: unknown) {

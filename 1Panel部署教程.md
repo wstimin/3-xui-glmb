@@ -115,7 +115,7 @@ docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Ports}}' | grep -i mysql
 不要解压成多一层目录，例如：
 
 ```text
-/opt/shiye/shiye-xuiyonghu/package.json
+/opt/shiye/3-xui-glmb/package.json
 ```
 
 如果多了一层，把里面的所有文件移动到 `/opt/shiye`。

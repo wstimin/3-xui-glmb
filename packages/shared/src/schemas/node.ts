@@ -24,6 +24,41 @@ export const serviceNodeEncryptionValues = [
 
 export const serviceNodeEncryptionSchema = z.enum(serviceNodeEncryptionValues);
 
+export const serviceNodeTransportValues = [
+  'tcp',
+  'kcp',
+  'ws',
+  'grpc',
+  'httpupgrade',
+  'xhttp',
+  'hysteria'
+] as const;
+
+export const serviceNodeTransportSchema = z.enum(serviceNodeTransportValues);
+
+export const serviceNodeTransportSettingsSchema = z.object({
+  version: z.literal(2).optional(),
+  acceptProxyProtocol: z.boolean().optional(),
+  path: z.string().trim().max(2048).optional().or(z.literal('')),
+  host: z.string().trim().max(255).optional().or(z.literal('')),
+  headers: z.record(z.string(), z.string()).optional(),
+  heartbeatPeriod: z.coerce.number().int().min(0).optional(),
+  serviceName: z.string().trim().max(255).optional().or(z.literal('')),
+  authority: z.string().trim().max(255).optional().or(z.literal('')),
+  multiMode: z.boolean().optional(),
+  mtu: z.coerce.number().int().min(576).max(1460).optional(),
+  tti: z.coerce.number().int().min(10).max(100).optional(),
+  uplinkCapacity: z.coerce.number().int().min(0).optional(),
+  downlinkCapacity: z.coerce.number().int().min(0).optional(),
+  cwndMultiplier: z.coerce.number().int().min(1).optional(),
+  maxSendingWindow: z.coerce.number().int().min(0).optional(),
+  mode: z.enum(['auto', 'packet-up', 'stream-up', 'stream-one']).optional(),
+  xPaddingBytes: z.string().trim().max(120).optional().or(z.literal('')),
+  scMaxBufferedPosts: z.coerce.number().int().min(0).optional(),
+  scStreamUpServerSecs: z.string().trim().max(120).optional().or(z.literal('')),
+  udpIdleTimeout: z.coerce.number().int().min(2).max(600).optional()
+});
+
 export const xuiServerUpsertSchema = z.object({
   name: z.string().trim().min(1).max(100),
   baseUrl: z.string().url(),
@@ -50,6 +85,8 @@ export const serviceNodeUpsertSchema = z.object({
   inboundPort: z.coerce.number().int().min(1).max(65535).optional(),
   protocol: serviceNodeProtocolSchema.default('vless'),
   encryption: serviceNodeEncryptionSchema.default('none'),
+  transport: serviceNodeTransportSchema.default('tcp'),
+  transportSettings: serviceNodeTransportSettingsSchema.default({}),
   socksRelayEnabled: z.boolean().default(false),
   socksNodeId: z.string().trim().optional().or(z.literal('')),
   priceMonthly: z.coerce.number().finite().min(0).default(0),

@@ -8,6 +8,8 @@ import { XuiService } from '../xui/xui.service.js';
 
 type ServiceNodeConfig = {
   encryption?: string;
+  transport?: string;
+  transportSettings?: Record<string, unknown>;
   socksRelayEnabled?: boolean;
   socksNodeId?: string | null;
   remoteMode?: 'create' | 'bind';
@@ -20,6 +22,10 @@ type ServiceNodeConfig = {
   remoteClientSubId?: string;
   remoteClientLinks?: string[];
 };
+
+type ServiceNodeInput = z.infer<typeof serviceNodeUpsertSchema>;
+type ServiceNodeEncryption = ServiceNodeInput['encryption'];
+type ServiceNodeTransport = ServiceNodeInput['transport'];
 
 type XuiServerConfig = {
   tlsServerName?: string;
@@ -104,6 +110,11 @@ export class NodesService {
 
   async createServiceNode(input: z.infer<typeof serviceNodeUpsertSchema>) {
     this.assertShareLinkProtocol(input.protocol);
+    const normalizedTransport = this.normalizeTransport(input.protocol, input.encryption, input.transport, input.transportSettings);
+    input.encryption = normalizedTransport.encryption;
+    input.transport = normalizedTransport.transport;
+    input.transportSettings = normalizedTransport.transportSettings;
+    this.assertTransportCompatibility(input.protocol, input.encryption, input.transport);
     await this.ensureServer(input.serverId);
     const remoteMode = input.remoteMode || 'create';
     let inboundId = input.inboundId || null;
@@ -120,6 +131,8 @@ export class NodesService {
         name: input.name,
         protocol: input.protocol,
         encryption: input.encryption,
+        transport: input.transport,
+        transportSettings: input.transportSettings,
         enabled: input.enabled,
         port: input.inboundPort,
         remark: input.name,
@@ -176,7 +189,19 @@ export class NodesService {
     let remoteClient: { email?: string; uuid?: string; subId?: string } | null = null;
     const nextName = input.name || current.name;
     const nextProtocol = input.protocol || current.protocol;
-    const nextEncryption = input.encryption || previousConfig.encryption || 'none';
+    let nextEncryption = input.encryption || previousConfig.encryption || 'none';
+    let nextTransport = input.transport || previousConfig.transport || 'tcp';
+    let nextTransportSettings = input.transportSettings === undefined
+      ? jsonObject(previousConfig.transportSettings)
+      : input.transportSettings;
+    const normalizedTransport = this.normalizeTransport(nextProtocol, nextEncryption, nextTransport, nextTransportSettings);
+    nextEncryption = normalizedTransport.encryption;
+    nextTransport = normalizedTransport.transport;
+    nextTransportSettings = normalizedTransport.transportSettings;
+    input.encryption = normalizedTransport.encryption;
+    input.transport = normalizedTransport.transport;
+    input.transportSettings = normalizedTransport.transportSettings;
+    this.assertTransportCompatibility(nextProtocol, nextEncryption, nextTransport);
     const nextEnabled = input.enabled ?? current.enabled;
     const nextRemotePort = input.inboundPort === undefined ? previousConfig.remoteInboundPort : input.inboundPort;
     const nextRemark = input.remark === undefined ? current.remark : input.remark || null;
@@ -199,6 +224,8 @@ export class NodesService {
         name: nextName,
         protocol: nextProtocol,
         encryption: nextEncryption,
+        transport: nextTransport,
+        transportSettings: nextTransportSettings,
         enabled: nextEnabled,
         port: input.inboundPort,
         remark: nextRemoteRemark,
@@ -235,6 +262,8 @@ export class NodesService {
         nextName !== current.name ||
         nextProtocol !== current.protocol ||
         nextEncryption !== (previousConfig.encryption || 'none') ||
+        nextTransport !== (previousConfig.transport || 'tcp') ||
+        !sameJson(nextTransportSettings, previousConfig.transportSettings || {}) ||
         nextEnabled !== current.enabled ||
         (remoteMode === 'create' && previousConfig.remoteInboundRemark !== nextRemoteRemark) ||
         (input.inboundPort !== undefined && nextRemotePort !== previousConfig.remoteInboundPort)
@@ -249,6 +278,8 @@ export class NodesService {
         nextName === current.name &&
         nextProtocol === current.protocol &&
         nextEncryption === (previousConfig.encryption || 'none') &&
+        nextTransport === (previousConfig.transport || 'tcp') &&
+        sameJson(nextTransportSettings, previousConfig.transportSettings || {}) &&
         previousConfig.remoteInboundRemark === nextRemoteRemark &&
         nextRemark === current.remark &&
         (input.inboundPort === undefined || nextRemotePort === previousConfig.remoteInboundPort)
@@ -257,16 +288,21 @@ export class NodesService {
         if (remoteEnableOnlyChanged) {
           await this.xui.setServiceNodeRemoteEnable(id, nextEnabled);
         } else {
-          await this.xui.updateServiceNodeInbound({
+          const remoteUpdated = await this.xui.updateServiceNodeInbound({
             serverId: nextServerId,
             inboundId,
             name: nextName,
             protocol: nextProtocol,
             encryption: config.encryption || 'none',
+            transport: config.transport || 'tcp',
+            transportSettings: config.transportSettings || {},
             enabled: nextEnabled,
             port: nextRemotePort,
-            remark: nextRemoteRemark
+            remark: nextRemoteRemark,
+            remoteClientEmail: stringValue(config.remoteClientEmail),
+            remoteClientSubId: stringValue(config.remoteClientSubId)
           });
+          if (remoteUpdated.links) config.remoteClientLinks = remoteUpdated.links;
         }
       }
       const updated = await this.prisma.serviceNode.update({
@@ -661,12 +697,71 @@ export class NodesService {
     }
   }
 
+  private assertTransportCompatibility(protocol: string, encryption: string, transport: string) {
+    if (protocol === 'hysteria') {
+      if (encryption !== 'tls' || transport !== 'hysteria') {
+        throw new BadRequestException('Hysteria2 requires the dedicated Hysteria transport with TLS in 3x-ui 3.5.0');
+      }
+      return;
+    }
+    if (transport === 'hysteria') {
+      throw new BadRequestException('The Hysteria transport is only valid for the Hysteria2 protocol in 3x-ui 3.5.0');
+    }
+    if (transport === 'kcp' && encryption !== 'none') {
+      throw new BadRequestException('mKCP does not support TLS or Reality in 3x-ui 3.5.0');
+    }
+    if (encryption === 'tls' && !['tcp', 'ws', 'grpc', 'httpupgrade', 'xhttp'].includes(transport)) {
+      throw new BadRequestException(`TLS does not support the ${transport} transport in 3x-ui 3.5.0`);
+    }
+    if (encryption === 'reality') {
+      if (!['vless', 'trojan'].includes(protocol)) {
+        throw new BadRequestException('Reality only supports VLESS and Trojan in 3x-ui 3.5.0');
+      }
+      if (!['tcp', 'grpc', 'xhttp'].includes(transport)) {
+        throw new BadRequestException(`Reality does not support the ${transport} transport in 3x-ui 3.5.0`);
+      }
+    }
+  }
+
+  private normalizeTransport(
+    protocol: string,
+    encryption: string,
+    transport: string,
+    transportSettings: Record<string, unknown>
+  ): { encryption: ServiceNodeEncryption; transport: ServiceNodeTransport; transportSettings: Record<string, unknown> } {
+    if (protocol === 'hysteria') {
+      const udpIdleTimeout = Number(transportSettings.udpIdleTimeout);
+      return {
+        encryption: 'tls',
+        transport: 'hysteria',
+        transportSettings: {
+          version: 2,
+          udpIdleTimeout: Number.isInteger(udpIdleTimeout) && udpIdleTimeout >= 2 && udpIdleTimeout <= 600
+            ? udpIdleTimeout
+            : 60
+        }
+      };
+    }
+    const normalizedEncryption = ['none', 'tls', 'reality'].includes(encryption)
+      ? encryption as ServiceNodeEncryption
+      : 'none';
+    const transportSupported = ['tcp', 'kcp', 'ws', 'grpc', 'httpupgrade', 'xhttp'].includes(transport);
+    const normalizedTransport = transportSupported ? transport as ServiceNodeTransport : 'tcp';
+    return {
+      encryption: normalizedEncryption,
+      transport: normalizedTransport,
+      transportSettings: transportSupported ? transportSettings : {}
+    };
+  }
+
   private async serviceNodeConfig(input: Partial<z.infer<typeof serviceNodeUpsertSchema>>, current?: Prisma.JsonValue | null, remotePatch: Partial<ServiceNodeConfig> = {}): Promise<ServiceNodeConfig> {
     const previous = jsonObject(current) as ServiceNodeConfig;
     const next: ServiceNodeConfig = {
       ...previous,
       ...remotePatch,
       encryption: input.encryption === undefined ? previous.encryption || 'none' : input.encryption,
+      transport: input.transport === undefined ? previous.transport || 'tcp' : input.transport,
+      transportSettings: input.transportSettings === undefined ? jsonObject(previous.transportSettings) : input.transportSettings,
       socksRelayEnabled: input.socksRelayEnabled === undefined ? Boolean(previous.socksRelayEnabled) : input.socksRelayEnabled,
       socksNodeId: input.socksNodeId === undefined ? previous.socksNodeId || null : input.socksNodeId || null
     };
@@ -710,6 +805,10 @@ function maskSocksNode<T extends { passwordEnc: string | null }>(node: T) {
 function jsonObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return value as Record<string, unknown>;
+}
+
+function sameJson(left: unknown, right: unknown) {
+  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {});
 }
 
 function stringValue(value: unknown) {
