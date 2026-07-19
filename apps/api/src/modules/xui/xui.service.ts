@@ -2201,7 +2201,7 @@ export class XuiService {
   }
 
   private isShareLink(item: unknown): item is string {
-    return typeof item === 'string' && /^(vless|vmess|trojan|ss|shadowsocks|hysteria|hy2):\/\//i.test(item.trim());
+    return typeof item === 'string' && /^(vless|vmess|trojan|ss|shadowsocks|hysteria|hysteria2|hy2):\/\//i.test(item.trim());
   }
 
   private gbToBytes(value: Prisma.Decimal | number | string | null) {
