@@ -21,25 +21,25 @@ systemd 服务文件：/etc/systemd/system/shiye-api.service
 默认卸载程序、systemd 服务和 Nginx 配置，保留数据库：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/3-xui-glmb/main/uninstall.sh | bash
 ```
 
 彻底卸载并删除默认数据库 `shiye_management` 和默认数据库用户 `shiye`：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | env DELETE_DATABASE=yes bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/3-xui-glmb/main/uninstall.sh | env DELETE_DATABASE=yes bash
 ```
 
 如果安装时自定义了安装目录、服务名、数据库名或数据库用户：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | env APP_NAME=shiye-api APP_DIR=/opt/shiye MYSQL_DATABASE=shiye_management MYSQL_USER=shiye DELETE_DATABASE=yes bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/3-xui-glmb/main/uninstall.sh | env APP_NAME=shiye-api APP_DIR=/opt/shiye MYSQL_DATABASE=shiye_management MYSQL_USER=shiye DELETE_DATABASE=yes bash
 ```
 
 如果 MySQL root 有密码，可以传入：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/wstimin/shiye-3xuigl-L3/main/uninstall.sh | env DELETE_DATABASE=yes MYSQL_ROOT_PASSWORD='你的MySQLRoot密码' bash
+curl -fsSL https://raw.githubusercontent.com/wstimin/3-xui-glmb/main/uninstall.sh | env DELETE_DATABASE=yes MYSQL_ROOT_PASSWORD='你的MySQLRoot密码' bash
 ```
 
 删除数据库对应的原始 MySQL 命令是：

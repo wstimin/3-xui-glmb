@@ -485,7 +485,7 @@ export class XuiService {
           const uuid = existing.uuid || remoteClientUuid || randomUUID();
           const subId = existing.subId || remoteClientSubId || this.subscriptionId(uuid);
           const email = existing.email || remoteClientEmail || this.serviceClientEmail(serviceNode.name, serviceNode.inboundId);
-          const payload = await client.updateClient(existing.email || email, this.buildXuiClient({
+          const payload = await this.updateClientPreservingRemote(client, existing.email || email, this.buildXuiClient({
               uuid,
               subId,
               email,
@@ -979,7 +979,7 @@ export class XuiService {
         flow: this.clientFlowForServiceNode(customerNode.serviceNode)
       });
       const route = 'clients/update';
-      const payload = await client.updateClient(existing.email || xuiEmail, xuiClient);
+      const payload = await this.updateClientPreservingRemote(client, existing.email || xuiEmail, xuiClient);
       this.assertXuiSuccess(payload);
       const links = targetStatus === 'active'
         ? await this.requireLinksForServiceNode(client, xuiEmail, subId, {
@@ -1140,6 +1140,31 @@ export class XuiService {
       subId: input.subId,
       reset: 0
     };
+  }
+
+  private async updateClientPreservingRemote(client: XuiClient, currentEmail: string, changes: Record<string, unknown>) {
+    const payload = await client.getClient(currentEmail);
+    this.assertXuiSuccess(payload);
+    const remoteClient = this.clientRecordFromPayload(payload, currentEmail);
+    if (!Object.keys(remoteClient).length) {
+      throw new BadGatewayException(`3x-ui did not return the complete client record for ${currentEmail}`);
+    }
+    return client.updateClient(currentEmail, { ...remoteClient, ...changes });
+  }
+
+  private clientRecordFromPayload(payload: unknown, email: string): Record<string, unknown> {
+    const root = this.xuiObject(payload);
+    const wrapped = root.obj ?? root.data ?? root.result ?? payload;
+    const object = this.xuiObject(wrapped);
+    const direct = this.xuiObject(object.client ?? root.client);
+    if (Object.keys(direct).length) return direct;
+    if (this.clientEmailOf(object)) return object;
+
+    const inbound = this.xuiObject(object.inbound ?? root.inbound ?? wrapped);
+    const settings = this.xuiObject(this.parseMaybeJson(inbound.settings));
+    const clients = Array.isArray(settings.clients) ? settings.clients : [];
+    const match = clients.find((item) => this.normalizeIdentity(this.clientEmailOf(item)) === this.normalizeIdentity(email));
+    return this.xuiObject(match);
   }
 
   private clientFlowForServiceNode(serviceNode: { protocol: string; config?: Prisma.JsonValue | null }) {

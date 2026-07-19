@@ -1,6 +1,6 @@
 export type XuiAuth =
   | { kind: 'token'; token: string }
-  | { kind: 'password'; username: string; password: string };
+  | { kind: 'password'; username: string; password: string; twoFactorCode?: string };
 
 export type XuiClientOptions = {
   baseUrl: string;
@@ -26,21 +26,24 @@ export class XuiClientError extends Error {
 export class XuiClient {
   private readonly fetchImpl: typeof fetch;
   private sessionCookie = '';
+  private csrfToken = '';
 
   constructor(private readonly options: XuiClientOptions) {
     this.fetchImpl = options.fetchImpl || fetch;
   }
 
   async request<T>(endpoint: string, options: XuiRequestOptions = {}): Promise<T> {
+    const method = options.method || (options.body ? 'POST' : 'GET');
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       ...this.authHeaders(),
       ...this.cookieHeaders(),
+      ...this.csrfHeaders(method),
       ...options.headers
     };
 
     const response = await this.fetchImpl(this.url(endpoint), {
-      method: options.method || (options.body ? 'POST' : 'GET'),
+      method,
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined
     });
@@ -48,20 +51,22 @@ export class XuiClient {
     const text = await response.text();
     this.rememberCookies(response.headers);
     const payload = text ? this.parse(text) : null;
-    if (!response.ok) throw new XuiClientError(`3x-ui request failed: ${response.status}`, response.status, payload);
+    this.assertResponse(response, payload);
     return payload as T;
   }
 
   async formRequest<T>(endpoint: string, options: XuiFormRequestOptions = {}): Promise<T> {
+    const method = options.method || (options.body ? 'POST' : 'GET');
     const headers: Record<string, string> = {
       'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
       ...this.authHeaders(),
       ...this.cookieHeaders(),
+      ...this.csrfHeaders(method),
       ...options.headers
     };
 
     const response = await this.fetchImpl(this.url(endpoint), {
-      method: options.method || (options.body ? 'POST' : 'GET'),
+      method,
       headers,
       body: options.body ? this.encodeForm(options.body) : undefined
     });
@@ -69,12 +74,25 @@ export class XuiClient {
     const text = await response.text();
     this.rememberCookies(response.headers);
     const payload = text ? this.parse(text) : null;
-    if (!response.ok) throw new XuiClientError(`3x-ui request failed: ${response.status}`, response.status, payload);
+    this.assertResponse(response, payload);
     return payload as T;
   }
 
-  login(body: { username: string; password: string }) {
-    return this.request('/login', { method: 'POST', body });
+  async login(body: { username: string; password: string; twoFactorCode?: string }) {
+    const payload = await this.request('/login', { method: 'POST', body });
+    if (this.options.auth?.kind !== 'token') await this.initializeCookieSession();
+    return payload;
+  }
+
+  async getCsrfToken() {
+    const payload = await this.request<unknown>('/csrf-token');
+    const object = this.asObject(payload);
+    const token = object.obj ?? object.data ?? object.token;
+    if (typeof token !== 'string' || !token) {
+      throw new XuiClientError('3x-ui did not return a CSRF token', 200, payload);
+    }
+    this.csrfToken = token;
+    return token;
   }
 
   listInbounds() {
@@ -207,6 +225,48 @@ export class XuiClient {
 
   private cookieHeaders(): Record<string, string> {
     return this.sessionCookie ? { Cookie: this.sessionCookie } : {};
+  }
+
+  private csrfHeaders(method: XuiRequestOptions['method']): Record<string, string> {
+    const unsafe = method && !['GET'].includes(method);
+    if (this.options.auth?.kind === 'token' || !unsafe || !this.csrfToken) return {};
+    return { 'X-CSRF-Token': this.csrfToken };
+  }
+
+  private async initializeCookieSession() {
+    try {
+      await this.getCsrfToken();
+    } catch (error) {
+      if (this.isUnsupportedCsrf(error)) return;
+      throw error;
+    }
+  }
+
+  private isUnsupportedCsrf(error: unknown) {
+    if (!(error instanceof XuiClientError)) return false;
+    if (error.status === 404 || error.status === 405) return true;
+    return /not found|not implemented|unsupported|unknown route|cannot get \/csrf-token/i.test(this.errorMessage(error.payload));
+  }
+
+  private assertResponse(response: Response, payload: unknown) {
+    const object = this.asObject(payload);
+    const message = this.errorMessage(payload);
+    if (!response.ok) {
+      throw new XuiClientError(message || `3x-ui request failed: ${response.status}`, response.status, payload);
+    }
+    if (object.success === false) {
+      throw new XuiClientError(message || '3x-ui returned success=false', response.status, payload);
+    }
+  }
+
+  private errorMessage(payload: unknown) {
+    const object = this.asObject(payload);
+    const message = object.msg ?? object.message ?? object.error;
+    return typeof message === 'string' ? message : '';
+  }
+
+  private asObject(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
   }
 
   private rememberCookies(headers: Headers) {
