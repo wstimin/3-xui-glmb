@@ -1,6 +1,6 @@
 {
   "name": "shiye-management-system",
-  "version": "0.5.47",
+  "version": "0.5.48",
   "private": true,
   "description": "Shiye management system for 3x-ui user nodes, renewals, SOCKS routing and sync logs.",
   "type": "module",

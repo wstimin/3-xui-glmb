@@ -1189,7 +1189,11 @@ export class XuiService {
     if (!Object.keys(remoteClient).length) {
       throw new BadGatewayException(`3x-ui did not return the complete client record for ${currentEmail}`);
     }
-    const updatePayload = { ...remoteClient, ...changes };
+    const preservedClient = { ...remoteClient };
+    if (typeof preservedClient.id !== 'string') {
+      delete preservedClient.id;
+    }
+    const updatePayload = { ...preservedClient, ...changes };
     if ('allowedIPs' in updatePayload) {
       updatePayload.allowedIPs = this.normalizeClientAllowedIPs(updatePayload.allowedIPs);
     }
