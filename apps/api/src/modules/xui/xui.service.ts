@@ -1189,7 +1189,11 @@ export class XuiService {
     if (!Object.keys(remoteClient).length) {
       throw new BadGatewayException(`3x-ui did not return the complete client record for ${currentEmail}`);
     }
-    return client.updateClient(currentEmail, { ...remoteClient, ...changes });
+    const updatePayload = { ...remoteClient, ...changes };
+    if ('allowedIPs' in updatePayload) {
+      updatePayload.allowedIPs = this.normalizeClientAllowedIPs(updatePayload.allowedIPs);
+    }
+    return client.updateClient(currentEmail, updatePayload);
   }
 
   private clientRecordFromPayload(payload: unknown, email: string): Record<string, unknown> {
@@ -2169,6 +2173,13 @@ export class XuiService {
     if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
     const text = this.stringValue(value);
     return text ? [text] : [];
+  }
+
+  private normalizeClientAllowedIPs(value: unknown): string[] {
+    const parsed = this.parseMaybeJson(value);
+    if (Array.isArray(parsed)) return parsed.map((item) => String(item).trim()).filter(Boolean);
+    if (typeof parsed !== 'string') return [];
+    return parsed.split(/[,\r\n]+/).map((item) => item.trim()).filter(Boolean);
   }
 
   private truncateText(value: string, maxLength: number) {
