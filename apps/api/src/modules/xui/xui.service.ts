@@ -1308,7 +1308,7 @@ export class XuiService {
     }
     if (security === 'reality') {
       const keys = await this.resolveRealityKeys(client);
-      const realityTarget = await this.resolveRealityTarget(client);
+      const realityTarget = await this.resolveRealityTarget(client, serverConfig);
       const target = realityTarget.target;
       const serverName = realityTarget.serverName;
       const fingerprint = String(serverConfig.realityFingerprint || 'chrome').trim() || 'chrome';
@@ -1527,7 +1527,9 @@ export class XuiService {
     return { privateKey, publicKey };
   }
 
-  private async resolveRealityTarget(client: XuiClient): Promise<RealityTargetInfo> {
+  private async resolveRealityTarget(client: XuiClient, serverConfig: Record<string, unknown>): Promise<RealityTargetInfo> {
+    const configuredTarget = String(serverConfig.realityTarget || '').trim();
+    const configuredServerName = String(serverConfig.realityServerName || '').trim();
     const scanned = await this.scanRealityTargets(client).catch(() => null);
     const discovered = this.bestRealityScanResult(scanned);
     if (discovered) {
@@ -1535,7 +1537,23 @@ export class XuiService {
       if (info) return info;
     }
 
-    throw new BadRequestException('Reality 自动创建没有扫描到可用目标网站，请检查 3x-ui 面板网络或稍后重试。');
+    if (configuredTarget) {
+      const target = this.normalizeRealityTarget(configuredTarget);
+      const serverName = this.manualRealityServerName(configuredServerName, target);
+      return { target, serverName, scan: {} };
+    }
+    if (configuredServerName) {
+      throw new BadRequestException('填写备用 Reality SNI 时必须同时填写备用 Reality 目标。');
+    }
+
+    throw new BadRequestException('Reality 自动创建没有扫描到可用目标网站，且未配置备用 Reality 目标。');
+  }
+
+  private manualRealityServerName(configuredServerName: string, target: string) {
+    if (configuredServerName) return configuredServerName;
+    const host = this.hostFromTarget(target);
+    if (host && !this.isIpAddress(host)) return host;
+    throw new BadRequestException('备用 Reality 目标为 IP 地址时，必须同时填写备用 Reality SNI。');
   }
 
   private async scanRealityTargets(client: XuiClient, targets?: string) {
