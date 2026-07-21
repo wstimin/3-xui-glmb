@@ -1308,7 +1308,7 @@ export class XuiService {
     }
     if (security === 'reality') {
       const keys = await this.resolveRealityKeys(client);
-      const realityTarget = await this.resolveRealityTarget(client, serverConfig);
+      const realityTarget = await this.resolveRealityTarget(client);
       const target = realityTarget.target;
       const serverName = realityTarget.serverName;
       const fingerprint = String(serverConfig.realityFingerprint || 'chrome').trim() || 'chrome';
@@ -1527,30 +1527,15 @@ export class XuiService {
     return { privateKey, publicKey };
   }
 
-  private async resolveRealityTarget(client: XuiClient, serverConfig: Record<string, unknown>): Promise<RealityTargetInfo> {
-    const configuredTarget = String(serverConfig.realityTarget || '').trim();
-
+  private async resolveRealityTarget(client: XuiClient): Promise<RealityTargetInfo> {
     const scanned = await this.scanRealityTargets(client).catch(() => null);
     const discovered = this.bestRealityScanResult(scanned);
     if (discovered) {
-      const info = this.realityInfoFromScan(discovered, serverConfig);
-      if (info) return info;
-    }
-
-    if (configuredTarget) {
-      const targetSeed = this.normalizeRealityTarget(configuredTarget);
-      const single = await this.scanRealityTarget(client, targetSeed).catch(() => null);
-      const info = this.realityInfoFromScan(single, serverConfig, targetSeed);
+      const info = this.realityInfoFromScan(discovered);
       if (info) return info;
     }
 
     throw new BadRequestException('Reality 自动创建没有扫描到可用目标网站，请检查 3x-ui 面板网络或稍后重试。');
-  }
-
-  private async scanRealityTarget(client: XuiClient, target: string) {
-    const payload = await client.scanRealityTarget(target);
-    this.assertXuiSuccess(payload);
-    return this.xuiObject(this.xuiObject(payload).obj || this.xuiObject(payload).data || payload);
   }
 
   private async scanRealityTargets(client: XuiClient, targets?: string) {
@@ -1561,46 +1546,26 @@ export class XuiService {
 
   private bestRealityScanResult(results: unknown) {
     const candidates = Array.isArray(results) ? results.map((item) => this.xuiObject(item)) : [];
-    return candidates.find((item) => item.feasible === true && this.stringValue(item.target))
-      || candidates.find((item) => item.feasible !== false && this.stringValue(item.target));
+    return candidates.find((item) => item.feasible === true && this.stringValue(item.target));
   }
 
-  private realityInfoFromScan(scan: Record<string, unknown> | null | undefined, serverConfig: Record<string, unknown>, fallbackTarget?: string): RealityTargetInfo | null {
+  private realityInfoFromScan(scan: Record<string, unknown> | null | undefined): RealityTargetInfo | null {
     if (!scan) return null;
-    if (scan.feasible === false) return null;
-    const targetValue = this.stringValue(scan.target) || fallbackTarget;
+    if (scan.feasible !== true) return null;
+    const targetValue = this.stringValue(scan.target);
     if (!targetValue) return null;
     const target = this.normalizeRealityTarget(targetValue);
-    const serverName = this.realityServerNameFromScan(serverConfig, target, scan);
+    const serverName = this.realityServerNameFromScan(target, scan);
     return { target, serverName, scan };
   }
 
-  private realityServerNameFromScan(serverConfig: Record<string, unknown>, target: string, scan?: Record<string, unknown>) {
+  private realityServerNameFromScan(target: string, scan?: Record<string, unknown>) {
     const serverNames = Array.isArray(scan?.serverNames) ? scan.serverNames.map((item) => String(item).trim()).filter(Boolean) : [];
     const scannedName = serverNames.find((item) => !item.startsWith('*.') && !this.isIpAddress(item)) || this.stringValue(scan?.host);
     if (scannedName && !this.isIpAddress(scannedName)) return scannedName;
     const host = this.hostFromTarget(target);
     if (host && !this.isIpAddress(host)) return host;
-    const configured = String(serverConfig.realityServerName || '').trim();
-    if (configured) return configured;
-    throw new BadRequestException('Reality requires a domain SNI. Set Reality SNI or use a scan result with a domain.');
-  }
-
-  private realityTarget(serverConfig: Record<string, unknown>) {
-    const target = String(serverConfig.realityTarget || '').trim();
-    if (target) return this.normalizeRealityTarget(target);
-    const host = this.hostFromUrl(String(serverConfig.baseUrl || ''));
-    if (host && !this.isIpAddress(host)) return `${host}:443`;
-
-    throw new BadRequestException('Reality 自动创建需要 3x-ui 面板地址使用域名，或在服务器配置里填写 Reality 目标，例如 example.com:443');
-  }
-
-  private realityServerName(serverConfig: Record<string, unknown>, target: string) {
-    const configured = String(serverConfig.realityServerName || '').trim();
-    if (configured) return configured;
-    const host = this.hostFromTarget(target);
-    if (host && !this.isIpAddress(host)) return host;
-    throw new BadRequestException('Reality 自动创建需要可用域名作为 SNI，请使用域名面板地址或填写 Reality SNI');
+    throw new BadRequestException('Reality 扫描结果没有返回可用的域名 SNI，请重新扫描后再创建。');
   }
 
   private realityLogDetail(streamSettings: Record<string, unknown>) {

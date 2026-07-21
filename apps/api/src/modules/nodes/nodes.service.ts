@@ -31,8 +31,6 @@ type XuiServerConfig = {
   tlsServerName?: string;
   tlsCertFile?: string;
   tlsKeyFile?: string;
-  realityTarget?: string;
-  realityServerName?: string;
   realityFingerprint?: string;
   realitySpiderX?: string;
 };
@@ -784,8 +782,6 @@ export class NodesService {
       tlsServerName: input.tlsServerName === undefined ? current.tlsServerName || '' : input.tlsServerName || '',
       tlsCertFile: input.tlsCertFile === undefined ? current.tlsCertFile || '' : input.tlsCertFile || '',
       tlsKeyFile: input.tlsKeyFile === undefined ? current.tlsKeyFile || '' : input.tlsKeyFile || '',
-      realityTarget: input.realityTarget === undefined ? current.realityTarget || '' : input.realityTarget || '',
-      realityServerName: input.realityServerName === undefined ? current.realityServerName || '' : input.realityServerName || '',
       realityFingerprint: input.realityFingerprint === undefined ? current.realityFingerprint || 'chrome' : input.realityFingerprint || 'chrome',
       realitySpiderX: input.realitySpiderX === undefined ? current.realitySpiderX || '/' : input.realitySpiderX || '/'
     };
@@ -821,8 +817,6 @@ function serverConfigFrom(value: unknown): XuiServerConfig {
     tlsServerName: String(config.tlsServerName || '').trim(),
     tlsCertFile: String(config.tlsCertFile || '').trim(),
     tlsKeyFile: String(config.tlsKeyFile || '').trim(),
-    realityTarget: String(config.realityTarget || '').trim(),
-    realityServerName: String(config.realityServerName || '').trim(),
     realityFingerprint: String(config.realityFingerprint || 'chrome').trim(),
     realitySpiderX: String(config.realitySpiderX || '/').trim()
   };

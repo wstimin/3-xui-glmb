@@ -69,8 +69,6 @@ export const xuiServerUpsertSchema = z.object({
   tlsServerName: z.string().trim().max(255).optional().or(z.literal('')),
   tlsCertFile: z.string().trim().max(500).optional().or(z.literal('')),
   tlsKeyFile: z.string().trim().max(500).optional().or(z.literal('')),
-  realityTarget: z.string().trim().max(255).optional().or(z.literal('')),
-  realityServerName: z.string().trim().max(255).optional().or(z.literal('')),
   realityFingerprint: z.string().trim().max(40).optional().or(z.literal('')),
   realitySpiderX: z.string().trim().max(120).optional().or(z.literal('')),
   enabled: z.boolean().default(true),

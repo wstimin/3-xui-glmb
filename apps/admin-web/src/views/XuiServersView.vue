@@ -16,8 +16,6 @@ type XuiServer = {
     tlsServerName?: string;
     tlsCertFile?: string;
     tlsKeyFile?: string;
-    realityTarget?: string;
-    realityServerName?: string;
     realityFingerprint?: string;
     realitySpiderX?: string;
   } | null;
@@ -44,12 +42,11 @@ const error = ref('');
 const searchQuery = ref('');
 const editingId = ref('');
 const dialogVisible = ref(false);
-const form = reactive({ name: '', baseUrl: '', basePath: '', username: '', password: '', token: '', tlsServerName: '', tlsCertFile: '', tlsKeyFile: '', realityTarget: '', realityServerName: '', realityFingerprint: 'chrome', realitySpiderX: '/', enabled: true, remark: '' });
+const form = reactive({ name: '', baseUrl: '', basePath: '', username: '', password: '', token: '', tlsServerName: '', tlsCertFile: '', tlsKeyFile: '', realityFingerprint: 'chrome', realitySpiderX: '/', enabled: true, remark: '' });
 
 const enabledServerCount = computed(() => servers.value.filter((server) => server.enabled).length);
 const tokenServerCount = computed(() => servers.value.filter((server) => server.hasToken).length);
 const tlsServerCount = computed(() => servers.value.filter((server) => hasTlsConfig(server)).length);
-const realityAutoCount = computed(() => servers.value.filter((server) => !server.config?.realityTarget || !server.config?.realityServerName).length);
 const filteredServers = computed(() => {
   const keyword = searchQuery.value.trim().toLowerCase();
   if (!keyword) return servers.value;
@@ -244,8 +241,6 @@ function editServer(server: XuiServer) {
     tlsServerName: server.config?.tlsServerName || '',
     tlsCertFile: server.config?.tlsCertFile || '',
     tlsKeyFile: server.config?.tlsKeyFile || '',
-    realityTarget: server.config?.realityTarget || '',
-    realityServerName: server.config?.realityServerName || '',
     realityFingerprint: server.config?.realityFingerprint || 'chrome',
     realitySpiderX: server.config?.realitySpiderX || '/',
     enabled: server.enabled,
@@ -300,7 +295,7 @@ async function toggleServerEnabled(server: XuiServer, enabled: boolean | string 
 
 function resetForm() {
   editingId.value = '';
-  Object.assign(form, { name: '', baseUrl: '', basePath: '', username: '', password: '', token: '', tlsServerName: '', tlsCertFile: '', tlsKeyFile: '', realityTarget: '', realityServerName: '', realityFingerprint: 'chrome', realitySpiderX: '/', enabled: true, remark: '' });
+  Object.assign(form, { name: '', baseUrl: '', basePath: '', username: '', password: '', token: '', tlsServerName: '', tlsCertFile: '', tlsKeyFile: '', realityFingerprint: 'chrome', realitySpiderX: '/', enabled: true, remark: '' });
 }
 
 function cleanFormBody() {
@@ -313,8 +308,6 @@ function cleanFormBody() {
     tlsServerName: form.tlsServerName.trim() || undefined,
     tlsCertFile: form.tlsCertFile.trim() || undefined,
     tlsKeyFile: form.tlsKeyFile.trim() || undefined,
-    realityTarget: form.realityTarget.trim() || undefined,
-    realityServerName: form.realityServerName.trim() || undefined,
     realityFingerprint: form.realityFingerprint.trim() || undefined,
     realitySpiderX: form.realitySpiderX.trim() || undefined,
     remark: form.remark.trim() || undefined
@@ -354,8 +347,6 @@ function serverSearchText(server: XuiServer) {
     server.hasPassword ? '账号密码' : '',
     server.config?.tlsServerName,
     server.config?.tlsCertFile,
-    server.config?.realityTarget,
-    server.config?.realityServerName,
     server.remark
   ].filter(Boolean).join(' ').toLowerCase();
 }
@@ -379,7 +370,7 @@ onMounted(loadServers);
     <div class="metric"><span>面板连接</span><strong>{{ servers.length }}</strong><small>启用 {{ enabledServerCount }}</small></div>
     <div class="metric"><span>Token 凭据</span><strong>{{ tokenServerCount }}</strong><small>优先使用 API Token</small></div>
     <div class="metric"><span>TLS 证书</span><strong>{{ tlsServerCount }}</strong><small>可自动创建 TLS 节点</small></div>
-    <div class="metric"><span>Reality 探测</span><strong>{{ realityAutoCount }}</strong><small>留空时由 3x-ui 自动扫描</small></div>
+    <div class="metric"><span>Reality 探测</span><strong>{{ servers.length }}</strong><small>创建时由 3x-ui 自动扫描</small></div>
   </div>
 
   <div class="panel list-panel">
@@ -412,10 +403,10 @@ onMounted(loadServers);
         <div class="entity-card-stats">
           <div><span>路径</span><strong>{{ server.basePath || '/' }}</strong></div>
           <div><span>TLS</span><strong>{{ hasTlsConfig(server) ? '已配置' : '未配置' }}</strong></div>
-          <div><span>Reality</span><strong>{{ server.config?.realityTarget ? '候选' : '自动探测' }}</strong></div>
+          <div><span>Reality</span><strong>自动探测</strong></div>
         </div>
         <div class="entity-card-meta">
-          <span>{{ server.config?.tlsServerName || server.config?.realityServerName || '暂无域名配置' }}</span>
+          <span>{{ server.config?.tlsServerName || '暂无 TLS 域名配置' }}</span>
           <span v-if="server.remark">{{ server.remark }}</span>
         </div>
         <div class="entity-card-actions split-card-actions">
@@ -471,10 +462,8 @@ onMounted(loadServers);
       </section>
 
       <section class="dialog-form-section">
-        <div class="dialog-section-head"><strong>Reality 探测</strong><span>目标和 SNI 可留空，创建节点时优先调用 3x-ui 自动扫描</span></div>
+        <div class="dialog-section-head"><strong>Reality 探测</strong><span>创建节点时使用 3x-ui 本次扫描返回的可用最优目标和 SNI</span></div>
         <div class="dialog-form-grid">
-          <el-form-item label="目标候选"><el-input v-model="form.realityTarget" placeholder="可留空；扫描失败时才尝试，例如 example.com:443" /></el-form-item>
-          <el-form-item label="SNI 候选"><el-input v-model="form.realityServerName" placeholder="可留空；优先使用扫描结果" /></el-form-item>
           <el-form-item label="指纹"><el-input v-model="form.realityFingerprint" placeholder="chrome" /></el-form-item>
           <el-form-item label="SpiderX"><el-input v-model="form.realitySpiderX" placeholder="/" /></el-form-item>
           <el-form-item label="备注" class="form-item-full"><el-input v-model="form.remark" /></el-form-item>
