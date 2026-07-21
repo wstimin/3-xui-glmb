@@ -313,8 +313,8 @@ function cleanFormBody() {
     tlsServerName: form.tlsServerName.trim() || undefined,
     tlsCertFile: form.tlsCertFile.trim() || undefined,
     tlsKeyFile: form.tlsKeyFile.trim() || undefined,
-    realityTarget: form.realityTarget.trim() || undefined,
-    realityServerName: form.realityServerName.trim() || undefined,
+    realityTarget: form.realityTarget.trim(),
+    realityServerName: form.realityServerName.trim(),
     realityFingerprint: form.realityFingerprint.trim() || undefined,
     realitySpiderX: form.realitySpiderX.trim() || undefined,
     remark: form.remark.trim() || undefined
